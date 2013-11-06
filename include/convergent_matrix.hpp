@@ -1,3 +1,7 @@
+/**
+ * A "convergent" global dense matrix data structure
+ */
+
 #ifndef CONVERGENT_MATRIX_H
 #define CONVERGENT_MATRIX_H
 
@@ -5,17 +9,19 @@
 #include <vector>
 #include <upcxx.h>
 
+// overloaded definitions of gemm() and gemv() for double and float
 #include "blas.hpp"
 
 // block-cyclic distribution
-#define MB 64
-#define NB 64
-#define NPROW 2
-#define NPCOL 2
-#define LLD 512
+//  ** designed to be PBLAS compatible **
+#define MB 64     // local row-blocking factor
+#define NB 64     // local col-blocking factor
+#define NPROW 2   // number of rows in the process grid
+#define NPCOL 2   // number of cols in the process grid
+#define LLD 512   // local leading dimension of col-major storage
 
-// threshold bin size (number of elems) before it is flushed
-#define BIN_FLUSH_THRESHOLD 1000
+// default bin-size threshold (number of elems) before it is flushed
+#define DEFAULT_BIN_FLUSH_THRESHOLD 1000
 
 /**
  * Contains all classes associated with the convergent-matrix abstraction
@@ -24,7 +30,7 @@ namespace convergent
 {
 
   /**
-   * Local dense matrix (supporting a _very_ limited set of blas ops)
+   * A local dense matrix (supporting a _very_ limited set of blas ops)
    */
   template <typename T>
   class LocalMatrix
@@ -209,7 +215,7 @@ namespace convergent
 
 
   /**
-   * Task that performs remote updates (spawned by Bin)
+   * A task that performs remote updates (spawned by Bin<T>)
    */
   template <typename T>
   void
@@ -290,6 +296,14 @@ namespace convergent
     std::vector<long> _ix, _jx;
     std::vector<T> _data;
 
+    inline void
+    clear()
+    {
+      _ix.clear();
+      _jx.clear();
+      _data.clear();
+    }
+
   public:
 
     Bin( upcxx::global_ptr<T> g_remote_data )
@@ -306,20 +320,13 @@ namespace convergent
       _data.push_back( data );
     }
 
-    inline void
-    clear()
-    {
-      _ix.clear();
-      _jx.clear();
-      _data.clear();
-    }
-
     inline long
-    size()
+    size() const
     {
       return _ix.size();
     }
 
+    // initiate remote async update using the current bin contents
     void
     flush()
     {
@@ -370,8 +377,25 @@ namespace convergent
   private:
 
     long _m, _n;
+    int _bin_flush_threshold;
     upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
     std::vector<Bin<T> *> _bins;
+
+    // flush bins that are "full" (exceed the current threshold)
+    void
+    bin_flush( int thresh )
+    {
+      for ( int tid = 0; tid < THREADS; tid++ )
+        if ( _bins[tid]->size() > thresh )
+          {
+#ifdef DEBUGMSGS
+            std::cout << "[" << __func__ << "] "
+                      << "flushing bin for tid " << tid
+                      << std::endl;
+#endif
+            _bins[tid]->flush();
+          }
+    }
 
   public:
 
@@ -413,9 +437,31 @@ namespace convergent
       _g_ptrs[MYTHREAD] = upcxx::allocate<T>( MYTHREAD, LLD * nbc * NB );
       upcxx::barrier();
 
+      // set flush threashold for bins
+      _bin_flush_threshold = DEFAULT_BIN_FLUSH_THRESHOLD;
+
       // set up bins
       for ( int tid = 0; tid < THREADS; tid++ )
         _bins.push_back( new Bin<T>( _g_ptrs[tid] ) );
+    }
+
+    ~ConvergentMatrix()
+    {
+      upcxx::deallocate( _g_ptrs[MYTHREAD] );
+      for ( int tid = 0; tid < THREADS; tid++ )
+        delete _bins[tid];
+    }
+
+    inline int
+    bin_flush_threshold()
+    {
+      return _bin_flush_threshold;
+    }
+
+    inline void
+    bin_flush_threshold( int thresh )
+    {
+      _bin_flush_threshold = thresh;
     }
 
     // general case
@@ -433,17 +479,8 @@ namespace convergent
             }
         }
 
-      // flush bins that are full
-      for ( int tid = 0; tid < THREADS; tid++ )
-        if ( _bins[tid]->size() > BIN_FLUSH_THRESHOLD )
-          {
-#ifdef DEBUGMSGS
-            std::cout << "[" << __func__ << "] "
-                      << "flushing bin for tid " << tid
-                      << std::endl;
-#endif
-            _bins[tid]->flush();
-          }
+      // possibly flush bins
+      bin_flush( _bin_flush_threshold );
     }
 
     // symmetric case
@@ -465,40 +502,15 @@ namespace convergent
             }
         }
 
-      // flush bins that are full
-      for ( int tid = 0; tid < THREADS; tid++ )
-        if ( _bins[tid]->size() > BIN_FLUSH_THRESHOLD )
-          {
-#ifdef DEBUGMSGS
-            std::cout << "[" << __func__ << "] "
-                      << "flushing bin for tid " << tid
-                      << std::endl;
-#endif
-            _bins[tid]->flush();
-          }
+      // possibly flush bins
+      bin_flush( _bin_flush_threshold );
     }
 
+    // drain _all_ of the bins
     void
     finalize()
     {
-      for ( int tid = 0; tid < THREADS; tid++ )
-        if ( _bins[tid]->size() > 0 )
-          {
-#ifdef DEBUGMSGS
-            std::cout << "[" << __func__ << "] "
-                      << "flushing bin for tid " << tid
-                      << std::endl;
-#endif
-            _bins[tid]->flush();
-          }
-#ifdef DEBUGMSGS
-        else
-          {
-             std::cout << "[" << __func__ << "] "
-                       << "no data for tid " << tid
-                       << std::endl;
-          }
-#endif
+      bin_flush( 0 );
       upcxx::wait();
       upcxx::barrier();
     }
