@@ -29,7 +29,7 @@ namespace convergent
   template <typename T>
   class LocalMatrix
   {
-    
+
     long _m, _n;
     long _ld;
     long *_ix, *_jx;
@@ -83,7 +83,7 @@ namespace convergent
         delete[] _data;
     }
 
-    inline T& 
+    inline T&
     operator()( long i ) const
     {
 #ifndef NOCHECK
@@ -93,8 +93,8 @@ namespace convergent
 #endif
       return _data[i];
     }
-    
-    inline T& 
+
+    inline T&
     operator()( long i, long j ) const
     {
 #ifndef NOCHECK
@@ -105,31 +105,31 @@ namespace convergent
 #endif
       return _trans ? _data[j + i * _m] : _data[i + j * _m];
     }
-    
-    inline long 
+
+    inline long
     m() const
     {
       return _trans ? _n : _m;
     }
-    
-    inline long 
+
+    inline long
     n() const
     {
       return _trans ? _m : _n;
     }
-    
+
     inline bool
     is_col_vector()
     {
       return _trans ? ( _n == 1 ) : ( _m == 1 );
     }
-    
+
     inline T *
     data() const
     {
       return _data;
     }
-    
+
     inline T *
     col_data( long j ) const
     {
@@ -140,7 +140,7 @@ namespace convergent
 #endif
       return &_data[j * _m];
     }
-    
+
     LocalMatrix<T> *
     trans()
     {
@@ -155,13 +155,13 @@ namespace convergent
     {
       LocalMatrix<T> *CMat;
       T alpha = 1.0, beta = 0.0;
-      
+
       // check on _view_ dimenions
       assert( n() == BMat.m() );
-      
+
       // allocate storage for result
       CMat = new LocalMatrix<T>( m(), BMat.n() );
-      
+
       if ( BMat._n == 1 )
         {
           // matrix-vector multiply
@@ -187,7 +187,7 @@ namespace convergent
           char transa, transb;
           m = _trans ? _n : _m;               // rows of op( A )
           n = BMat._trans? BMat._m : BMat._n; // cols of op( B )
-          k = _trans ? _m : _n;               // cols of op( A ) 
+          k = _trans ? _m : _n;               // cols of op( A )
           lda = _ld;
           ldb = BMat._ld;
           ldc = CMat->_ld;
@@ -201,7 +201,7 @@ namespace convergent
                 &beta,
                 CMat->_data, &ldc );
         }
-    
+
       return CMat;
     }
 
@@ -261,8 +261,8 @@ namespace convergent
     // (2) update
     for ( long k = 0; k < size; k++ )
       {
-        long ix = 
-          p_ix[k] / ( MB * NPROW ) * NB + p_ix[k] % MB + 
+        long ix =
+          p_ix[k] / ( MB * NPROW ) * NB + p_ix[k] % MB +
           LLD * ( p_jx[k] / ( NB * NPCOL ) * NB + p_jx[k] % NB );
         p_my_data[ix] += p_data[k];
       }
@@ -277,18 +277,19 @@ namespace convergent
 
   /**
    * Implements the binning w/ remote apply for a single thread
+   * Very inefficient space-wise at the moment ...
    */
   template<typename T>
   class Bin
   {
-  
+
   private:
-  
+
     int _remote_tid;
     upcxx::global_ptr<T> _g_remote_data;
     std::vector<long> _ix, _jx;
     std::vector<T> _data;
-  
+
   public:
 
     Bin( upcxx::global_ptr<T> g_remote_data )
@@ -350,7 +351,7 @@ namespace convergent
       upcxx::async( _remote_tid )( update_task<float>,
                                    _data.size(),
                                    _g_remote_data,
-                                   g_ix, g_jx, g_data ); 
+                                   g_ix, g_jx, g_data );
 
       // clear internal (vector) storage
       clear();
@@ -360,7 +361,7 @@ namespace convergent
 
 
   /**
-   * Convergent matrix
+   * Convergent matrix abstraction
    */
   template <typename T>
   class ConvergentMatrix
@@ -386,6 +387,7 @@ namespace convergent
 
       // check on block-cyclic distribution
       assert( NPCOL * NPROW == THREADS );
+
       // store args
       _m = m;
       _n = n;
@@ -397,9 +399,9 @@ namespace convergent
       nbc = _n / ( NB * NPCOL ) + ( _n % ( NB * NPCOL ) > mycol * NB ? 1 : 0 );
 #ifdef DEBUGMSGS
       std::cout << "[" << __func__ << "] "
-                << "Thread " << MYTHREAD 
-                << " [ " << myrow 
-                << " / " << mycol 
+                << "Thread " << MYTHREAD
+                << " [ " << myrow
+                << " / " << mycol
                 << " ] " << nbr << " x " << nbc << " local blocks"
                 << std::endl;
 #endif
@@ -416,7 +418,7 @@ namespace convergent
         _bins.push_back( new Bin<T>( _g_ptrs[tid] ) );
     }
 
-    // general
+    // general case
     void
     update( LocalMatrix<T> *Mat, long *ix, long *jx )
     {
@@ -434,10 +436,17 @@ namespace convergent
       // flush bins that are full
       for ( int tid = 0; tid < THREADS; tid++ )
         if ( _bins[tid]->size() > BIN_FLUSH_THRESHOLD )
-          _bins[tid]->flush();
+          {
+#ifdef DEBUGMSGS
+            std::cout << "[" << __func__ << "] "
+                      << "flushing bin for tid " << tid
+                      << std::endl;
+#endif
+            _bins[tid]->flush();
+          }
     }
 
-    // symmetric
+    // symmetric case
     void
     update( LocalMatrix<T> *Mat, long *ix )
     {
