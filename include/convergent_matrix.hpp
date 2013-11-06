@@ -5,6 +5,8 @@
 #include <vector>
 #include <upcxx.h>
 
+#include "blas.hpp"
+
 // block-cyclic distribution
 #define MB 64
 #define NB 64
