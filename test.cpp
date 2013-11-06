@@ -1,9 +1,5 @@
-#include <iostream>
 #include <upcxx.h>
-
 #include "convergent_matrix.hpp"
-
-using namespace std;
 
 int
 main( int argc, char **argv )
@@ -16,8 +12,8 @@ main( int argc, char **argv )
   // init the eventually-consistent matrix abstraction
   mat = new convergent::ConvergentMatrix<float>( 1000, 1000 );
 
-  // perform a dummy update from a single thread
-  if ( MYTHREAD == 1 )
+  // perform a dummy updates from a subset of threads
+  if ( MYTHREAD == 1 || MYTHREAD == 3 )
     {
       // dims
       const int m = 100, n = 20;
