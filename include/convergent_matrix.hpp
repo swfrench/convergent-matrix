@@ -377,6 +377,7 @@ namespace convergent
   private:
 
     long _m, _n;
+    long _nbr, _nbc;
     int _bin_flush_threshold;
     upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
     std::vector<Bin<T> *> _bins;
@@ -403,7 +404,6 @@ namespace convergent
     {
       long ld_req;
       long myrow, mycol;
-      long nbr, nbc;
 
       // checks on matrix dimension
       assert( m > 0 );
@@ -419,22 +419,22 @@ namespace convergent
       // setup block-cyclic distribution
       myrow = MYTHREAD / NPROW;
       mycol = MYTHREAD % NPCOL;
-      nbr = _m / ( MB * NPROW ) + ( _m % ( MB * NPROW ) > myrow * MB ? 1 : 0 );
-      nbc = _n / ( NB * NPCOL ) + ( _n % ( NB * NPCOL ) > mycol * NB ? 1 : 0 );
+      _nbr = _m / ( MB * NPROW ) + ( _m % ( MB * NPROW ) > myrow * MB ? 1 : 0 );
+      _nbc = _n / ( NB * NPCOL ) + ( _n % ( NB * NPCOL ) > mycol * NB ? 1 : 0 );
 #ifdef DEBUGMSGS
       std::cout << "[" << __func__ << "] "
                 << "Thread " << MYTHREAD
                 << " [ " << myrow
                 << " / " << mycol
-                << " ] " << nbr << " x " << nbc << " local blocks"
+                << " ] " << _nbr << " x " << _nbc << " local blocks"
                 << std::endl;
 #endif
 
       // allocate local storage, exchange global ptrs
-      ld_req = nbr * MB;
+      ld_req = _nbr * MB;
       assert( ld_req <= LLD );
       _g_ptrs.init( THREADS );
-      _g_ptrs[MYTHREAD] = upcxx::allocate<T>( MYTHREAD, LLD * nbc * NB );
+      _g_ptrs[MYTHREAD] = upcxx::allocate<T>( MYTHREAD, LLD * _nbc * NB );
       upcxx::barrier();
 
       // set flush threashold for bins
@@ -450,6 +450,14 @@ namespace convergent
       upcxx::deallocate( _g_ptrs[MYTHREAD] );
       for ( int tid = 0; tid < THREADS; tid++ )
         delete _bins[tid];
+    }
+
+    // returns view of local block-cyclic storage as a LocalMatrix
+    // ** no copy is performed - result is undefined after call to finalize() **
+    inline LocalMatrix<T> *
+    local_matrix()
+    {
+      return new LocalMatrix<T>( LLD, _nbc * NB, (T *)(_g_ptrs[MYTHREAD]) );
     }
 
     inline int
