@@ -295,7 +295,7 @@ namespace convergent
     for ( long k = 0; k < size; k++ )
       {
         long ix =
-          p_ix[k] / ( MB * NPROW ) * NB + p_ix[k] % MB +
+          p_ix[k] / ( MB * NPROW ) * MB + p_ix[k] % MB +
           LLD * ( p_jx[k] / ( NB * NPCOL ) * NB + p_jx[k] % NB );
         p_my_data[ix] += p_data[k];
       }
