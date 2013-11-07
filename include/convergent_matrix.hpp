@@ -147,7 +147,7 @@ namespace convergent
     inline bool
     is_col_vector()
     {
-      return _trans ? ( _n == 1 ) : ( _m == 1 );
+      return _trans ? ( _m == 1 ) : ( _n == 1 );
     }
 
     inline T *
