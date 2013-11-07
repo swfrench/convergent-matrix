@@ -147,6 +147,13 @@ namespace convergent
       return &_data[j * _m];
     }
 
+    // free matrix data pointer in destructor, even though we did not allocate it
+    inline void
+    override_free()
+    {
+      _alloc = true;
+    }
+
     LocalMatrix<T> *
     trans()
     {
@@ -379,6 +386,8 @@ namespace convergent
     long _m, _n;
     long _nbr, _nbc;
     int _bin_flush_threshold;
+    bool _frozen;
+    T *_local_ptr;
     upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
     std::vector<Bin<T> *> _bins;
 
@@ -430,11 +439,15 @@ namespace convergent
                 << std::endl;
 #endif
 
-      // allocate local storage, exchange global ptrs
+      // allocate local storage, exchange global ptrs ...
+      //  - check minimum local leading dimension
       ld_req = _nbr * MB;
       assert( ld_req <= LLD );
+      //  - initialize shared_array of global pointers
       _g_ptrs.init( THREADS );
-      _g_ptrs[MYTHREAD] = upcxx::allocate<T>( MYTHREAD, LLD * _nbc * NB );
+      //  - allocate storage, cast to global_ptr, write to _g_ptrs
+      _local_ptr = new T [LLD * _nbc * NB];
+      _g_ptrs[MYTHREAD] = (upcxx::global_ptr<T>)(_local_ptr);
       upcxx::barrier();
 
       // set flush threashold for bins
@@ -443,21 +456,23 @@ namespace convergent
       // set up bins
       for ( int tid = 0; tid < THREADS; tid++ )
         _bins.push_back( new Bin<T>( _g_ptrs[tid] ) );
+
+      // set _frozen to false, and we're open for business
+      _frozen = false;
     }
 
     ~ConvergentMatrix()
     {
-      upcxx::deallocate( _g_ptrs[MYTHREAD] );
       for ( int tid = 0; tid < THREADS; tid++ )
         delete _bins[tid];
     }
 
     // returns view of local block-cyclic storage as a LocalMatrix
-    // ** no copy is performed - result is undefined after call to finalize() **
+    // ** no copy is performed - may continue to mutate if called before freeze() **
     inline LocalMatrix<T> *
     local_matrix()
     {
-      return new LocalMatrix<T>( LLD, _nbc * NB, (T *)(_g_ptrs[MYTHREAD]) );
+      return new LocalMatrix<T>( LLD, _nbc * NB, _local_ptr );
     }
 
     inline int
@@ -476,6 +491,9 @@ namespace convergent
     void
     update( LocalMatrix<T> *Mat, long *ix, long *jx )
     {
+#ifndef NOCHECK
+      assert( ! _frozen );
+#endif
       // bin the local update
       for ( long j = 0; j < Mat->n(); j++ )
         {
@@ -496,6 +514,7 @@ namespace convergent
     update( LocalMatrix<T> *Mat, long *ix )
     {
 #ifndef NOCHECK
+      assert( ! _frozen );
       assert( Mat->m() == Mat->n() );
 #endif
 
@@ -516,11 +535,12 @@ namespace convergent
 
     // drain _all_ of the bins
     void
-    finalize()
+    freeze()
     {
       bin_flush( 0 );
       upcxx::wait();
       upcxx::barrier();
+      _frozen = true;
     }
 
   }; // end of ConvergentMatrix

@@ -1,11 +1,15 @@
+#include <iostream>
 #include <upcxx.h>
 #include "convergent_matrix.hpp"
+
+using namespace std;
 
 int
 main( int argc, char **argv )
 {
   convergent::ConvergentMatrix<float> *mat;
-  
+  convergent::LocalMatrix<float> *local_mat;
+
   // init upcxx
   upcxx::init( &argc, &argv );
  
@@ -38,9 +42,22 @@ main( int argc, char **argv )
       mat->update( GtG, ix );
     }
 
-  // finalize the ConvergentMatrix abstraction
-  // ** implicit barrier() and wait() on async updates **
-  mat->finalize();
+  // freeze the ConvergentMatrix abstraction
+  // ** implicit barrier() and wait() on remaining async updates **
+  mat->freeze();
+
+  // fetch the local PBLAS-compatible block-cyclic storage array
+  local_mat = mat->local_matrix();
+
+  // safe to delete mat now
+  delete mat;
+
+  // allow the LocalMatrix destructor to manage the underlying matrix data
+  local_mat->override_free();
+
+  cout << "Thread " << MYTHREAD << " "
+       << "local_mat(0,0) = " << (*local_mat)( 0, 0 )
+       << endl;
 
   // shut down upcxx
   upcxx::finalize();
