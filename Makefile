@@ -21,8 +21,8 @@ O	= obj
 B	= bin
 
 # build products
-OBJ	= $O/test.o
-BIN	= $B/test.x
+OBJ	= $O/simple_example.o
+BIN	= $B/simple_example.x
 
 ####
 
