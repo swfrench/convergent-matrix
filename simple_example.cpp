@@ -13,11 +13,11 @@ main( int argc, char **argv )
   // init upcxx
   upcxx::init( &argc, &argv );
  
-  // init the eventually-consistent matrix abstraction
+  // init distributed matrix object (block-cyclic: see convergent_matrix.hpp)
   dist_mat = new convergent::ConvergentMatrix<float>( 1000, 1000 );
 
   // perform a number of dummy updates from subsets of threads
-  const int m = 100, n = 20; // matrix dims
+  const int m = 100, n = 20; // "G" matrix dims
   const int niter = 10;      // number of cycles
   for ( int iter = 0; iter < niter; iter++ )
     if ( MYTHREAD % 2 == iter % 2 )
@@ -28,7 +28,7 @@ main( int argc, char **argv )
         convergent::LocalMatrix<float> *G, *GtG;
 
         // init dummy G matrix
-        G = new convergent::LocalMatrix<float>( m, n, 1.0);
+        G = new convergent::LocalMatrix<float>( m, n, 1.0 );
 
         // init dummy trailing index
         ix = new long [n];
@@ -61,11 +61,13 @@ main( int argc, char **argv )
   // allow the LocalMatrix destructor to manage the underlying matrix data
   local_mat->override_free();
 
-  // ** now we can now freely use local_mat->data() w/ the PBLAS and friends **
+  // ** we can now freely use local_mat->data() w/ the PBLAS and friends **
 
   // expected result on thread 0 at (0,0) for the above test
   if ( MYTHREAD == 0 )
     assert( (int)(*local_mat)( 0, 0 ) == ( THREADS / 2 ) * niter * m );
+  else
+    assert( (int)(*local_mat)( 0, 0 ) == 0 );
 
   cout << "Thread " << MYTHREAD << " "
        << "local_mat(0,0) = " << (*local_mat)( 0, 0 )
