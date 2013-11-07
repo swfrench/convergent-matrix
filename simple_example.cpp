@@ -47,13 +47,15 @@ main( int argc, char **argv )
   mat->freeze();
 
   // fetch the local PBLAS-compatible block-cyclic storage array
-  local_mat = mat->local_matrix();
+  local_mat = mat->as_local_matrix();
 
   // safe to delete mat now
   delete mat;
 
   // allow the LocalMatrix destructor to manage the underlying matrix data
   local_mat->override_free();
+
+  // ** now we can now freely use local_mat->data() w/ the PBLAS and friends **
 
   cout << "Thread " << MYTHREAD << " "
        << "local_mat(0,0) = " << (*local_mat)( 0, 0 )

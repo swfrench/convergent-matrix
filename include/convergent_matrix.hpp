@@ -13,7 +13,8 @@
 #include "blas.hpp"
 
 // block-cyclic distribution
-//  ** designed to be PBLAS compatible **
+//  ** the ConvergentMatrix abstraction is designed to be PBLAS compatible **
+// TODO: move these to preprocessor defines?
 #define MB 64     // local row-blocking factor
 #define NB 64     // local col-blocking factor
 #define NPROW 2   // number of rows in the process grid
@@ -289,7 +290,7 @@ namespace convergent
 
 
   /**
-   * Implements the binning w/ remote apply for a single thread
+   * Implements the binning / remote application for a single thread
    * Very inefficient space-wise at the moment ...
    */
   template<typename T>
@@ -440,12 +441,15 @@ namespace convergent
 #endif
 
       // allocate local storage, exchange global ptrs ...
-      //  - check minimum local leading dimension
+
+      // (1) check minimum local leading dimension
       ld_req = _nbr * MB;
       assert( ld_req <= LLD );
-      //  - initialize shared_array of global pointers
+
+      // (2) initialize shared_array of global pointers
       _g_ptrs.init( THREADS );
-      //  - allocate storage, cast to global_ptr, write to _g_ptrs
+
+      // (3) allocate storage, cast to global_ptr, write to _g_ptrs
       _local_ptr = new T [LLD * _nbc * NB];
       _g_ptrs[MYTHREAD] = (upcxx::global_ptr<T>)(_local_ptr);
       upcxx::barrier();
@@ -463,6 +467,7 @@ namespace convergent
 
     ~ConvergentMatrix()
     {
+      // it is assumed that the user will free _local_ptr
       for ( int tid = 0; tid < THREADS; tid++ )
         delete _bins[tid];
     }
@@ -470,7 +475,7 @@ namespace convergent
     // returns view of local block-cyclic storage as a LocalMatrix
     // ** no copy is performed - may continue to mutate if called before freeze() **
     inline LocalMatrix<T> *
-    local_matrix()
+    as_local_matrix()
     {
       return new LocalMatrix<T>( LLD, _nbc * NB, _local_ptr );
     }
