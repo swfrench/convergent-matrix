@@ -1,5 +1,5 @@
-A "convergent" global dense matrix data structure
--------------------------------------------------
+A "convergent" distributed dense matrix data structure
+------------------------------------------------------
 
 A preliminary implementation of a distributed dense-matrix data structure
 supporting asynchronous updates.

@@ -1,5 +1,24 @@
 /**
- * A "convergent" global dense matrix data structure
+ * A "convergent" distributed dense matrix data structure
+ *
+ * Key components:
+ *
+ *  - The LocalMatrix<T> object, which simply represents a local matrix and
+ *    supports a few common BLAS operations; these are how the updates are
+ *    represented locally, along with index arrays which map into the global
+ *    index space.
+ *
+ *  - The ConvergentMatrix<T> abstraction accumulates updates to the global
+ *    distributed matrix in bins (Bin<T>) for later asynchronous application.
+ *
+ *  - The Bin<T> object implements the binning concept in ConvergentMatrix,
+ *    and handles "flushing" its contents by triggering remote asynchronous
+ *    updates (update_task<T>).
+ *
+ * Once all updates have been applied, the matrix can be "frozen" and all bins
+ * are flushed. Thereafter, each thread has its own PBLAS-compatible (using a
+ * block-cyclic distribution and assuming a row-major process grid) portion of
+ * the global matrix.
  */
 
 #ifndef CONVERGENT_MATRIX_H
