@@ -63,7 +63,7 @@ main( int argc, char **argv )
 
   // ** we can now freely use local_mat->data() w/ the PBLAS and friends **
 
-  // expected result on thread 0 at (0,0) for the above test
+  // check expected result at local index (0,0) for the above test
   if ( MYTHREAD == 0 )
     assert( (int)(*local_mat)( 0, 0 ) == ( THREADS / 2 ) * niter * m );
   else
