@@ -1,28 +1,22 @@
-
-# local path to upcxx install
-UPCXX_PATH = $(HOME)/Code/Dev/upcxx/upcxx_install
+# pull in config
+include flags.mk
 
 # pull in upcxx flags
 include $(UPCXX_PATH)/include/upcxx.mak
 
 # local include dir
-I	= include
+I = include
 
 # compilation
-CXX	= clang++
-CXXFLAGS= -O0 $(UPCXX_CXXFLAGS) -DDEBUGMSGS -I$I
-
-# blas (uses fortran interface internally, so no CXXFLAGS)
-BLAS_LDFLAGS=
-BLAS_LDLIBS = -framework Accelerate
+CXXFLAGS += $(UPCXX_CXXFLAGS) -I$I
 
 # dirs
-O	= obj
-B	= bin
+O = obj
+B = bin
 
 # build products
-OBJ	= $O/simple_example.o
-BIN	= $B/simple_example.x
+OBJ = $O/simple_example.o
+BIN = $B/simple_example.x
 
 ####
 
@@ -32,7 +26,7 @@ $(BIN) : $O $B $(OBJ)
 	$(CXX) $(UPCXX_LDFLAGS) $(BLAS_LDFLAGS) \
 		$(OBJ) $(UPCXX_LDLIBS) $(BLAS_LDLIBS) -o $@
 
-$O/%.o : %.cpp $I/convergent_matrix.hpp
+$O/%.o : %.cpp $I/*.hpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $O :
