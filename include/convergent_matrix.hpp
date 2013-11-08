@@ -8,17 +8,19 @@
  *    represented locally, along with index arrays which map into the global
  *    index space.
  *
- *  - The ConvergentMatrix<T> abstraction accumulates updates to the global
- *    distributed matrix in bins (Bin<T>) for later asynchronous application.
+ *  - The ConvergentMatrix<T,NPROW,NPCOL,MB,NB,LLD> abstraction accumulates
+ *    updates to the global distributed matrix in bins (Bin<T>) for later
+ *    asynchronous application.
  *
  *  - The Bin<T> object implements the binning concept in ConvergentMatrix,
  *    and handles "flushing" its contents by triggering remote asynchronous
  *    updates (update_task<T>).
  *
  * Once all updates have been applied, the matrix can be "frozen" and all bins
- * are flushed. Thereafter, each thread has its own PBLAS-compatible (using a
- * block-cyclic distribution and assuming a row-major process grid) portion of
- * the global matrix.
+ * are flushed. Thereafter, each thread has its own PBLAS-compatible portion of
+ * the global matrix, consistent with the block-cyclic distribution defined by
+ * the template parameters of ConvergentMatrix and  assuming a row-major order
+ * of threads in the process grid.
  */
 
 #ifndef CONVERGENT_MATRIX_H
@@ -30,15 +32,6 @@
 
 // overloaded definitions of gemm() and gemv() for double and float
 #include "blas.hpp"
-
-// block-cyclic distribution
-//  ** the ConvergentMatrix abstraction is designed to be PBLAS compatible **
-// TODO: move these to preprocessor defines?
-#define MB 64     // local row-blocking factor
-#define NB 64     // local col-blocking factor
-#define NPROW 2   // number of rows in the process grid
-#define NPCOL 2   // number of cols in the process grid
-#define LLD 512   // local leading dimension of col-major storage
 
 // default bin-size threshold (number of elems) before it is flushed
 #define DEFAULT_BIN_FLUSH_THRESHOLD 10000
@@ -263,11 +256,10 @@ namespace cm
   update_task( long size,
                upcxx::global_ptr<T>    g_my_data,
                upcxx::global_ptr<long> g_ix,
-               upcxx::global_ptr<long> g_jx,
                upcxx::global_ptr<T>    g_data )
   {
     // local ptrs (for casts)
-    long *p_ix, *p_jx;
+    long *p_ix;
     T *p_data, *p_my_data;
 
 #ifdef DEBUGMSGS
@@ -279,44 +271,34 @@ namespace cm
 #endif
 
     // global pointers to local storage for remote copy
-    upcxx::global_ptr<long> g_ix_local, g_jx_local;
+    upcxx::global_ptr<long> g_ix_local;
     upcxx::global_ptr<T> g_data_local;
 
     // allocate local storage
     g_ix_local = upcxx::allocate<long>( MYTHREAD, size );
-    g_jx_local = upcxx::allocate<long>( MYTHREAD, size );
     g_data_local = upcxx::allocate<T>( MYTHREAD, size );
 
     // copy to local
     upcxx::copy( g_ix, g_ix_local, size );
-    upcxx::copy( g_jx, g_jx_local, size );
     upcxx::copy( g_data, g_data_local, size );
 
     // free remote storage
     upcxx::deallocate( g_ix );
-    upcxx::deallocate( g_jx );
     upcxx::deallocate( g_data );
 
     // .. perform update ..
 
     // (1) cast to local ptrs
     p_ix = (long *) g_ix_local;
-    p_jx = (long *) g_jx_local;
     p_data = (T *) g_data_local;
     p_my_data = (T *) g_my_data;
 
     // (2) update
     for ( long k = 0; k < size; k++ )
-      {
-        long ix =
-          p_ix[k] / ( MB * NPROW ) * MB + p_ix[k] % MB +
-          LLD * ( p_jx[k] / ( NB * NPCOL ) * NB + p_jx[k] % NB );
-        p_my_data[ix] += p_data[k];
-      }
+      p_my_data[p_ix[k]] += p_data[k];
 
     // (3) free local storage
     upcxx::deallocate( g_ix_local );
-    upcxx::deallocate( g_jx_local );
     upcxx::deallocate( g_data_local );
 
   } // end of update_task
@@ -335,14 +317,13 @@ namespace cm
 
     int _remote_tid;
     upcxx::global_ptr<T> _g_remote_data;
-    std::vector<long> _ix, _jx;
+    std::vector<long> _ix;
     std::vector<T> _data;
 
     inline void
     clear()
     {
       _ix.clear();
-      _jx.clear();
       _data.clear();
     }
 
@@ -355,10 +336,9 @@ namespace cm
     }
 
     inline void
-    append( T data, long i, long j )
+    append( T data, long ij )
     {
-      _ix.push_back( i );
-      _jx.push_back( j );
+      _ix.push_back( ij );
       _data.push_back( data );
     }
 
@@ -373,26 +353,23 @@ namespace cm
     flush()
     {
       // local ptrs (for casts)
-      long *p_ix, *p_jx;
+      long *p_ix;
       T *p_data;
 
       // global ptrs to local storage for async remote copy
-      upcxx::global_ptr<long> g_ix, g_jx;
+      upcxx::global_ptr<long> g_ix;
       upcxx::global_ptr<T> g_data;
 
       // allocate local storage
       g_ix = upcxx::allocate<long>( MYTHREAD, _ix.size() );
-      g_jx = upcxx::allocate<long>( MYTHREAD, _jx.size() );
       g_data = upcxx::allocate<T>( MYTHREAD, _data.size() );
 
       // fill local storage from accumulated updates
       p_ix = (long *)g_ix;
-      p_jx = (long *)g_jx;
       p_data = (T *)g_data;
       for ( long i = 0; i < _ix.size(); i++ )
         {
           p_ix[i] = _ix[i];
-          p_jx[i] = _jx[i];
           p_data[i] = _data[i];
         }
 
@@ -400,7 +377,7 @@ namespace cm
       upcxx::async( _remote_tid )( update_task<float>,
                                    _data.size(),
                                    _g_remote_data,
-                                   g_ix, g_jx, g_data );
+                                   g_ix, g_data );
 
       // clear internal (vector) storage
       clear();
@@ -412,7 +389,10 @@ namespace cm
   /**
    * Convergent matrix abstraction
    */
-  template <typename T>
+  template <typename T,              // matrix type
+            long NPROW, long NPCOL,  // pblas process grid
+            long MB, long NB,        // pblas local blocking factors
+            long LLD>                // pblas local leading dim
   class ConvergentMatrix
   {
 
@@ -572,10 +552,12 @@ namespace cm
       for ( long j = 0; j < Mat->n(); j++ )
         {
           int pcol = ( jx[j] / NB ) % NPCOL;
+          long off_j = LLD * ( jx[j] / ( NB * NPCOL ) * NB + jx[j] % NB );
           for ( long i = 0; i < Mat->m(); i++ )
             {
               int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
-              _bins[tid]->append( (*Mat)( i, j ), ix[i], jx[j] );
+              long ij = off_j + ix[i] / ( MB * NPROW ) * MB + ix[i] % MB;
+              _bins[tid]->append( (*Mat)( i, j ), ij );
             }
         }
 
@@ -595,10 +577,12 @@ namespace cm
       for ( long j = 0; j < Mat->n(); j++ )
         {
           int pcol = ( ix[j] / NB ) % NPCOL;
+          long off_j = LLD * ( ix[j] / ( NB * NPCOL ) * NB + ix[j] % NB );
           for ( long i = j; i < Mat->m(); i++ )
             {
               int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
-              _bins[tid]->append( (*Mat)( i, j ), ix[i], ix[j] );
+              long ij = off_j + ix[i] / ( MB * NPROW ) * MB + ix[i] % MB;
+              _bins[tid]->append( (*Mat)( i, j ), ij );
             }
         }
 

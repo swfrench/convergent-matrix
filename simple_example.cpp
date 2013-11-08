@@ -4,17 +4,19 @@
 
 using namespace std;
 
+typedef cm::ConvergentMatrix<float,2,2,64,64,512> cmat_t;
+
 int
 main( int argc, char **argv )
 {
-  cm::ConvergentMatrix<float> *dist_mat;
+  cmat_t *dist_mat;
   cm::LocalMatrix<float> *local_mat;
 
   // init upcxx
   upcxx::init( &argc, &argv );
  
   // init distributed matrix object (block-cyclic: see convergent_matrix.hpp)
-  dist_mat = new cm::ConvergentMatrix<float>( 1000, 1000 );
+  dist_mat = new cmat_t( 1000, 1000 );
 
   // perform a number of dummy updates from subsets of threads
   const int m = 100, n = 20; // "G" matrix dims
