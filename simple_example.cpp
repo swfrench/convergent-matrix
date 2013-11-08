@@ -7,14 +7,14 @@ using namespace std;
 int
 main( int argc, char **argv )
 {
-  convergent::ConvergentMatrix<float> *dist_mat;
-  convergent::LocalMatrix<float> *local_mat;
+  cm::ConvergentMatrix<float> *dist_mat;
+  cm::LocalMatrix<float> *local_mat;
 
   // init upcxx
   upcxx::init( &argc, &argv );
  
   // init distributed matrix object (block-cyclic: see convergent_matrix.hpp)
-  dist_mat = new convergent::ConvergentMatrix<float>( 1000, 1000 );
+  dist_mat = new cm::ConvergentMatrix<float>( 1000, 1000 );
 
   // perform a number of dummy updates from subsets of threads
   const int m = 100, n = 20; // "G" matrix dims
@@ -25,10 +25,10 @@ main( int argc, char **argv )
         // trailing index of G
         long *ix;
         // local dense matrices for G and G^tG
-        convergent::LocalMatrix<float> *G, *GtG;
+        cm::LocalMatrix<float> *G, *GtG;
 
         // init dummy G matrix
-        G = new convergent::LocalMatrix<float>( m, n, 1.0 );
+        G = new cm::LocalMatrix<float>( m, n, 1.0 );
 
         // init dummy trailing index
         ix = new long [n];

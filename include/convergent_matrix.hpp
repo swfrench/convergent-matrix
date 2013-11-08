@@ -49,7 +49,7 @@
 /**
  * Contains all classes associated with the convergent-matrix abstraction
  */
-namespace convergent
+namespace cm
 {
 
   /**
@@ -621,6 +621,6 @@ namespace convergent
 
   }; // end of ConvergentMatrix
 
-} // end of namespace convergent
+} // end of namespace cm
 
 #endif
