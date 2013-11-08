@@ -41,7 +41,10 @@
 #define LLD 512   // local leading dimension of col-major storage
 
 // default bin-size threshold (number of elems) before it is flushed
-#define DEFAULT_BIN_FLUSH_THRESHOLD 1000
+#define DEFAULT_BIN_FLUSH_THRESHOLD 10000
+
+// default number of update() to trigger progress() and drain (local) task queue
+#define DEFAULT_PROGRESS_INTERVAL 10
 
 /**
  * Contains all classes associated with the convergent-matrix abstraction
@@ -417,6 +420,8 @@ namespace convergent
 
     long _m, _n;
     long _nbr, _nbc;
+    int _flush_counter;
+    int _progress_interval;
     int _bin_flush_threshold;
     bool _frozen;
     T *_local_ptr;
@@ -425,18 +430,36 @@ namespace convergent
 
     // flush bins that are "full" (exceed the current threshold)
     void
-    bin_flush( int thresh )
+    flush( int thresh )
     {
+      // flush the bins
       for ( int tid = 0; tid < THREADS; tid++ )
         if ( _bins[tid]->size() > thresh )
           {
 #ifdef DEBUG_MSGS
             std::cout << "[" << __func__ << "] "
+                      << "Thread " << MYTHREAD << " "
                       << "flushing bin for tid " << tid
                       << std::endl;
 #endif
             _bins[tid]->flush();
           }
+
+      // increment update counter
+      _flush_counter += 1;
+
+      // check whether we should pause to flush the task queue
+      if ( _flush_counter == _progress_interval )
+        {
+#ifdef DEBUG_MSGS
+          std::cout << "[" << __func__ << "] "
+                    << "Thread " << MYTHREAD << " "
+                    << "calling progress() to flush task queue"
+                    << std::endl;
+#endif
+          upcxx::progress();
+          _flush_counter = 0;
+        }
     }
 
   public:
@@ -492,6 +515,9 @@ namespace convergent
       for ( int tid = 0; tid < THREADS; tid++ )
         _bins.push_back( new Bin<T>( _g_ptrs[tid] ) );
 
+      // init counter for initiating calls to progress()
+      _flush_counter = 0;
+
       // set _frozen to false, and we're open for business
       _frozen = false;
     }
@@ -523,6 +549,18 @@ namespace convergent
       _bin_flush_threshold = thresh;
     }
 
+    inline int
+    progress_interval()
+    {
+      return _progress_interval;
+    }
+
+    inline void
+    progress_interval( int interval )
+    {
+      _progress_interval = interval;
+    }
+
     // general case
     void
     update( LocalMatrix<T> *Mat, long *ix, long *jx )
@@ -542,7 +580,7 @@ namespace convergent
         }
 
       // possibly flush bins
-      bin_flush( _bin_flush_threshold );
+      flush( _bin_flush_threshold );
     }
 
     // symmetric case
@@ -553,7 +591,6 @@ namespace convergent
       assert( ! _frozen );
       assert( Mat->m() == Mat->n() );
 #endif
-
       // bin the local update
       for ( long j = 0; j < Mat->n(); j++ )
         {
@@ -566,16 +603,19 @@ namespace convergent
         }
 
       // possibly flush bins
-      bin_flush( _bin_flush_threshold );
+      flush( _bin_flush_threshold );
     }
 
-    // drain _all_ of the bins
+    // drain the bins, stop accepting updates
     void
     freeze()
     {
-      bin_flush( 0 );
+      // flush all non-empty bins
+      flush( 0 );
+      // wait on spawned remote asyncs
       upcxx::wait();
       upcxx::barrier();
+      // stop accepting updates
       _frozen = true;
     }
 
