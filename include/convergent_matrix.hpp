@@ -262,7 +262,7 @@ namespace cm
     long *p_ix;
     T *p_data, *p_my_data;
 
-#ifdef DEBUGMSGS
+#ifdef DEBUG_MSGS
     std::cout << "[" << __func__ << "] "
               << "Thread " << MYTHREAD << " "
               << "performing async update spawned by " << g_data.tid() << " "
@@ -423,6 +423,12 @@ namespace cm
                       << std::endl;
 #endif
             _bins[tid]->flush();
+#ifdef DEBUG_MSGS
+            std::cout << "[" << __func__ << "] "
+                      << "Thread " << MYTHREAD << " "
+                      << "returned from flush() in bin for tid " << tid
+                      << std::endl;
+#endif
           }
 
       // increment update counter
