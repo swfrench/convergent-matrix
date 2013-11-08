@@ -58,7 +58,6 @@ namespace convergent
 
     long _m, _n;
     long _ld;
-    long *_ix, *_jx;
     bool _trans;
     bool _alloc;
     T *_data;
@@ -98,6 +97,18 @@ namespace convergent
       _m = m;
       _n = n;
       _ld = m;
+      _trans = false;
+      _alloc = false;
+      _data = data;
+    }
+
+    LocalMatrix( long m, long n, long ld, T *data )
+    {
+      assert( m > 0 );
+      assert( n > 0 );
+      _m = m;
+      _n = n;
+      _ld = ld;
       _trans = false;
       _alloc = false;
       _data = data;
@@ -310,7 +321,8 @@ namespace convergent
 
   /**
    * Implements the binning / remote application for a single thread
-   * Very inefficient space-wise at the moment ...
+   * Not very efficient in terms of space for the moment, in exchange for
+   * simplicity.
    */
   template<typename T>
   class Bin
@@ -418,7 +430,7 @@ namespace convergent
       for ( int tid = 0; tid < THREADS; tid++ )
         if ( _bins[tid]->size() > thresh )
           {
-#ifdef DEBUGMSGS
+#ifdef DEBUG_MSGS
             std::cout << "[" << __func__ << "] "
                       << "flushing bin for tid " << tid
                       << std::endl;
@@ -450,7 +462,7 @@ namespace convergent
       mycol = MYTHREAD % NPCOL;
       _nbr = _m / ( MB * NPROW ) + ( _m % ( MB * NPROW ) > myrow * MB ? 1 : 0 );
       _nbc = _n / ( NB * NPCOL ) + ( _n % ( NB * NPCOL ) > mycol * NB ? 1 : 0 );
-#ifdef DEBUGMSGS
+#ifdef DEBUG_MSGS
       std::cout << "[" << __func__ << "] "
                 << "Thread " << MYTHREAD
                 << " [ " << myrow
@@ -496,7 +508,7 @@ namespace convergent
     inline LocalMatrix<T> *
     as_local_matrix()
     {
-      return new LocalMatrix<T>( LLD, _nbc * NB, _local_ptr );
+      return new LocalMatrix<T>( _nbr * MB, _nbc * NB, LLD, _local_ptr );
     }
 
     inline int
