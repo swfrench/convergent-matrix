@@ -350,7 +350,7 @@ namespace cm
 
     // initiate remote async update using the current bin contents
     void
-    flush()
+    flush( upcxx::event *e )
     {
       // local ptrs (for casts)
       long *p_ix;
@@ -374,10 +374,10 @@ namespace cm
         }
 
       // spawn the remote update (responsible for deallocating g_*)
-      upcxx::async( _remote_tid )( update_task<float>,
-                                   _data.size(),
-                                   _g_remote_data,
-                                   g_ix, g_data );
+      upcxx::async( _remote_tid, e )( update_task<float>,
+                                      _data.size(),
+                                      _g_remote_data,
+                                      g_ix, g_data );
 
       // clear internal (vector) storage
       clear();
@@ -405,8 +405,9 @@ namespace cm
     int _bin_flush_threshold;
     bool _frozen;
     T *_local_ptr;
-    upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
     std::vector<Bin<T> *> _bins;
+    upcxx::event _e;
+    upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
 
     // flush bins that are "full" (exceed the current threshold)
     void
@@ -422,7 +423,7 @@ namespace cm
                       << "flushing bin for tid " << tid
                       << std::endl;
 #endif
-            _bins[tid]->flush();
+            _bins[tid]->flush( &_e );
 #ifdef DEBUG_MSGS
             std::cout << "[" << __func__ << "] "
                       << "Thread " << MYTHREAD << " "
@@ -602,8 +603,12 @@ namespace cm
     {
       // flush all non-empty bins
       flush( 0 );
-      // wait on spawned remote asyncs
-      upcxx::wait();
+      // wait on spawned remote asyncs ...
+      // - call barrier once to synchronize and *current* local task queue
+      upcxx::barrier();
+      // - wait on all spawned asyncs
+      _e.wait();
+      // - call second barrier s.t. we do not return until all updates applied
       upcxx::barrier();
       // stop accepting updates
       _frozen = true;
