@@ -475,6 +475,9 @@ namespace cm
       for ( int tid = 0; tid < THREADS; tid++ )
         _bins.push_back( new Bin<T>( _g_ptrs[tid] ) );
 
+      // init the progress() interval to its default value
+      _progress_interval = DEFAULT_PROGRESS_INTERVAL;
+
       // init counter for initiating calls to progress()
       _flush_counter = 0;
 
