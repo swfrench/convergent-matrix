@@ -270,36 +270,18 @@ namespace cm
               << std::endl;
 #endif
 
-    // global pointers to local storage for remote copy
-    upcxx::global_ptr<long> g_ix_local;
-    upcxx::global_ptr<T> g_data_local;
-
-    // allocate local storage
-    g_ix_local = upcxx::allocate<long>( MYTHREAD, size );
-    g_data_local = upcxx::allocate<T>( MYTHREAD, size );
-
-    // copy to local
-    upcxx::copy( g_ix, g_ix_local, size );
-    upcxx::copy( g_data, g_data_local, size );
-
-    // free remote storage
-    upcxx::deallocate( g_ix );
-    upcxx::deallocate( g_data );
-
-    // .. perform update ..
-
-    // (1) cast to local ptrs
-    p_ix = (long *) g_ix_local;
-    p_data = (T *) g_data_local;
+    // cast to local ptrs
+    p_ix = (long *) g_ix;
+    p_data = (T *) g_data;
     p_my_data = (T *) g_my_data;
 
-    // (2) update
+    // update
     for ( long k = 0; k < size; k++ )
       p_my_data[p_ix[k]] += p_data[k];
 
-    // (3) free local storage
-    upcxx::deallocate( g_ix_local );
-    upcxx::deallocate( g_data_local );
+    // free local (but remotely allocated) storage
+    upcxx::deallocate( g_ix );
+    upcxx::deallocate( g_data );
 
   } // end of update_task
 
@@ -352,28 +334,19 @@ namespace cm
     void
     flush( upcxx::event *e )
     {
-      // local ptrs (for casts)
-      long *p_ix;
-      T *p_data;
-
       // global ptrs to local storage for async remote copy
       upcxx::global_ptr<long> g_ix;
       upcxx::global_ptr<T> g_data;
 
-      // allocate local storage
-      g_ix = upcxx::allocate<long>( MYTHREAD, _ix.size() );
-      g_data = upcxx::allocate<T>( MYTHREAD, _data.size() );
+      // allocate remote storage
+      g_ix = upcxx::allocate<long>( _remote_tid, _ix.size() );
+      g_data = upcxx::allocate<T>( _remote_tid, _data.size() );
 
-      // fill local storage from accumulated updates
-      p_ix = (long *)g_ix;
-      p_data = (T *)g_data;
-      for ( long i = 0; i < _ix.size(); i++ )
-        {
-          p_ix[i] = _ix[i];
-          p_data[i] = _data[i];
-        }
+      // copy to remote
+      upcxx::copy( (upcxx::global_ptr<long>) _ix.data(), g_ix, _ix.size() );
+      upcxx::copy( (upcxx::global_ptr<T>) _data.data(), g_data, _data.size() );
 
-      // spawn the remote update (responsible for deallocating g_*)
+      // spawn the remote update (responsible for deallocating g_ix, g_data)
       upcxx::async( _remote_tid, e )( update_task<float>,
                                       _data.size(),
                                       _g_remote_data,
