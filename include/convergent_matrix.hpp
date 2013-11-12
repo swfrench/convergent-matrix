@@ -262,11 +262,10 @@ namespace cm
     long *p_ix;
     T *p_data, *p_my_data;
 
-#ifdef DEBUG_MSGS
+#if defined(DEBUG_MSGS) || defined(ASYNC_DEBUG_MSGS)
     std::cout << "[" << __func__ << "] "
               << "Thread " << MYTHREAD << " "
-              << "performing async update spawned by " << g_data.tid() << " "
-              << "of size " << size
+              << "performing async update of size " << size
               << std::endl;
 #endif
 
@@ -352,6 +351,14 @@ namespace cm
                                       _g_remote_data,
                                       g_ix, g_data );
 
+#if defined(DEBUG_MSGS) || defined(ASYNC_DEBUG_MSGS)
+      std::cout << "[" << __func__ << "] "
+                << "Thread " << MYTHREAD << " "
+                << "called async() for update of size " << _data.size() << " "
+                << "on thread " << _remote_tid
+                << std::endl;
+#endif
+
       // clear internal (vector) storage
       clear();
     }
@@ -382,6 +389,13 @@ namespace cm
     upcxx::event _e;
     upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
 
+    // drain the entire task queue
+    void
+    drain_task_queue()
+    {
+      upcxx::drain();
+    }
+
     // flush bins that are "full" (exceed the current threshold)
     void
     flush( int thresh )
@@ -409,15 +423,11 @@ namespace cm
       _flush_counter += 1;
 
       // check whether we should pause to flush the task queue
-      if ( _flush_counter == _progress_interval )
+      if ( thresh == 0 || _flush_counter == _progress_interval )
         {
-#ifdef DEBUG_MSGS
-          std::cout << "[" << __func__ << "] "
-                    << "Thread " << MYTHREAD << " "
-                    << "calling progress() to flush task queue"
-                    << std::endl;
-#endif
-          upcxx::progress();
+          // drain the task queue
+          drain_task_queue();
+          // reset the counter
           _flush_counter = 0;
         }
     }
@@ -577,14 +587,17 @@ namespace cm
     void
     freeze()
     {
-      // flush all non-empty bins
-      flush( 0 );
-      // wait on spawned remote asyncs ...
-      // - call barrier once to synchronize and *current* local task queue
+      // synchronize
       upcxx::barrier();
-      // - wait on all spawned asyncs
+      // flush all non-empty bins (local task queue will be emptied)
+      flush( 0 );
+      // sync again (all locally-queued remote tasks have been dispatched)
+      upcxx::barrier();
+      // catch the last wave of tasks, if any
+      drain_task_queue();
+      // wait on remote tasks
       _e.wait();
-      // - call second barrier s.t. we do not return until all updates applied
+      // done, sync on return
       upcxx::barrier();
       // stop accepting updates
       _frozen = true;
