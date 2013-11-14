@@ -52,6 +52,8 @@ namespace cm
   class LocalMatrix
   {
 
+  private:
+
     long _m, _n;
     long _ld;
     bool _trans;
@@ -390,15 +392,15 @@ namespace cm
     upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
 
     // drain the entire task queue
-    void
+    inline void
     drain_task_queue()
     {
       upcxx::drain();
     }
 
     // flush bins that are "full" (exceed the current threshold)
-    void
-    flush( int thresh )
+    inline void
+    flush( int thresh = 0 )
     {
       // flush the bins
       for ( int tid = 0; tid < THREADS; tid++ )
@@ -584,13 +586,13 @@ namespace cm
     }
 
     // drain the bins, stop accepting updates
-    void
+    inline void
     freeze()
     {
       // synchronize
       upcxx::barrier();
       // flush all non-empty bins (local task queue will be emptied)
-      flush( 0 );
+      flush();
       // sync again (all locally-queued remote tasks have been dispatched)
       upcxx::barrier();
       // catch the last wave of tasks, if any
