@@ -348,7 +348,7 @@ namespace cm
       upcxx::copy( (upcxx::global_ptr<T>) _data.data(), g_data, _data.size() );
 
       // spawn the remote update (responsible for deallocating g_ix, g_data)
-      upcxx::async( _remote_tid, e )( update_task<float>,
+      upcxx::async( _remote_tid, e )( update_task<T>,
                                       _data.size(),
                                       _g_remote_data,
                                       g_ix, g_data );
@@ -475,8 +475,8 @@ namespace cm
       // (2) initialize shared_array of global pointers
       _g_ptrs.init( THREADS );
 
-      // (3) allocate storage, cast to global_ptr, write to _g_ptrs
-      _local_ptr = new T [LLD * _nbc * NB];
+      // (3) allocate and zero storage; cast to global_ptr and write to _g_ptrs
+      _local_ptr = new T [LLD * _nbc * NB]();
       _g_ptrs[MYTHREAD] = (upcxx::global_ptr<T>)(_local_ptr);
       upcxx::barrier();
 
