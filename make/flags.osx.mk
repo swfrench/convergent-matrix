@@ -5,7 +5,7 @@ UPCXX_PATH = $(HOME)/Code/Dev/upcxx/upcxx_install
 CXX = clang++
 
 # base compiler opts
-CXXFLAGS = -O3
+CXXFLAGS = -O3 -Wall -DNOCHECK
 
 # blas (uses fortran interface internally, so no CXXFLAGS)
 BLAS_LDFLAGS =

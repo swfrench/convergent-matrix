@@ -5,7 +5,7 @@ UPCXX_PATH = $(HOME)/upcxx/edison/upcxx_install
 CXX = CC
 
 # base compiler opts
-CXXFLAGS = -O3
+CXXFLAGS = -O3 -Wall -DNOCHECK
 
 # blas (uses fortran interface internally, so no CXXFLAGS)
 BLAS_LDFLAGS =
