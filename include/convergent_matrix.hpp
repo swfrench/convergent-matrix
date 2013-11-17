@@ -233,9 +233,9 @@ namespace cm
         {
           int m, n, k, lda, ldb, ldc;
           char transa, transb;
-          m = m();   // rows of op( A )
-          n = B.n(); // cols of op( B )
-          k = n();   // cols of op( A )
+          m = this->m(); // rows of op( A )
+          n = B.n();     // cols of op( B )
+          k = this->n(); // cols of op( A )
           lda = _ld;
           ldb = B._ld;
           ldc = C->_ld;
