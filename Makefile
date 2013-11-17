@@ -26,7 +26,7 @@ $(BIN) : $O $B $(OBJ)
 	$(CXX) $(UPCXX_LDFLAGS) $(BLAS_LDFLAGS) \
 		$(OBJ) $(UPCXX_LDLIBS) $(BLAS_LDLIBS) -o $@
 
-$O/%.o : %.cpp $I/*.hpp
+$O/%.o : example/%.cpp $I/*.hpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $O :
