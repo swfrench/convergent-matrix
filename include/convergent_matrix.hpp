@@ -19,15 +19,15 @@
  * Once all updates have been applied, the matrix can be "frozen" and all bins
  * are flushed. Thereafter, each thread has its own PBLAS-compatible portion of
  * the global matrix, consistent with the block-cyclic distribution defined by
- * the template parameters of ConvergentMatrix and  assuming a row-major order
+ * the template parameters of ConvergentMatrix and assuming a row-major order
  * of threads in the process grid.
  */
 
-#ifndef CONVERGENT_MATRIX_H
-#define CONVERGENT_MATRIX_H
+#pragma once
 
 #include <iostream>
 #include <vector>
+#include <cassert>
 #include <upcxx.h>
 
 // overloaded definitions of gemm() and gemv() for double and float
@@ -40,105 +40,58 @@
 #define DEFAULT_PROGRESS_INTERVAL 10
 
 /**
- * Contains all classes associated with the convergent-matrix abstraction
+ * Contains classes associated with the convergent-matrix abstraction
  */
 namespace cm
 {
 
   /**
-   * A local dense matrix (supporting a _very_ limited set of blas ops)
+   * A local dense matrix abstraction supporting a limited set of level 2 and 3
+   * BLAS operations and element-wise arithmetic
    */
   template <typename T>
   class LocalMatrix
   {
 
-  private:
+   private:
 
-    long _m, _n;
-    long _ld;
-    bool _trans;
+    long _m, _n, _ld;
     bool _alloc;
-    T *_data;
+    bool _trans;
+    T * _data;
 
-  public:
+   public:
 
-    LocalMatrix( long m, long n )
-    {
-      assert( m > 0 );
-      assert( n > 0 );
-      _m = m;
-      _n = n;
-      _ld = m;
-      _trans = false;
-      _alloc = true;
-      _data = new T[m * n];
-    }
+    LocalMatrix() :
+      _m(0), _n(0), _ld(0), _alloc(false), _trans(false), _data(NULL)
+    {}
 
-    LocalMatrix( long m, long n, T init )
-    {
-      assert( m > 0 );
-      assert( n > 0 );
-      _m = m;
-      _n = n;
-      _ld = m;
-      _trans = false;
-      _alloc = true;
-      _data = new T[m * n];
-      for ( long ij = 0; ij < m * n; ij++ )
-        _data[ij] = init;
-    }
+    LocalMatrix( long m, long n ) :
+      _m(m), _n(n), _ld(m), _alloc(true), _trans(false), _data(new T[m * n])
+    {}
 
-    LocalMatrix( long m, long n, T *data )
-    {
-      assert( m > 0 );
-      assert( n > 0 );
-      _m = m;
-      _n = n;
-      _ld = m;
-      _trans = false;
-      _alloc = false;
-      _data = data;
-    }
+    LocalMatrix( long m, long n, T * data ) :
+      _m(m), _n(n), _ld(m), _alloc(false), _trans(false), _data(data)
+    {}
 
-    LocalMatrix( long m, long n, long ld, T *data )
-    {
-      assert( m > 0 );
-      assert( n > 0 );
-      _m = m;
-      _n = n;
-      _ld = ld;
-      _trans = false;
-      _alloc = false;
-      _data = data;
-    }
+    LocalMatrix( long m, long n, long ld ) :
+      _m(m), _n(n), _ld(ld), _alloc(true), _trans(false), _data(new T[ld * n])
+    {}
+
+    LocalMatrix( long m, long n, long ld, T * data ) :
+      _m(m), _n(n), _ld(ld), _alloc(false), _trans(false), _data(data)
+    {}
 
     ~LocalMatrix()
     {
       if ( _alloc )
-        delete[] _data;
+        delete [] _data;
     }
 
-    inline T&
-    operator()( long i ) const
+    inline void
+    override_free()
     {
-#ifndef NOCHECK
-      assert( _n == 1 );
-      assert( i >= 0 );
-      assert( i < m() );
-#endif
-      return _data[i];
-    }
-
-    inline T&
-    operator()( long i, long j ) const
-    {
-#ifndef NOCHECK
-      assert( i >= 0 );
-      assert( i < m() );
-      assert( j >= 0 );
-      assert( j < n() );
-#endif
-      return _trans ? _data[j + i * _m] : _data[i + j * _m];
+      _alloc = true;
     }
 
     inline long
@@ -153,98 +106,151 @@ namespace cm
       return _trans ? _m : _n;
     }
 
-    inline bool
-    is_col_vector()
-    {
-      return _trans ? ( _m == 1 ) : ( _n == 1 );
-    }
-
-    inline T *
-    data() const
-    {
-      return _data;
-    }
-
-    inline T *
-    col_data( long j ) const
-    {
-#ifndef NOCHECK
-      // non-sensical under transpose view
-      assert( ! _trans );
-      assert( j < n() );
-#endif
-      return &_data[j * _m];
-    }
-
-    // free matrix data pointer in destructor, even though we did not allocate it
-    inline void
-    override_free()
-    {
-      _alloc = true;
-    }
-
     LocalMatrix<T> *
     trans()
     {
-      LocalMatrix<T> *TMat = new LocalMatrix<T>( _m, _n, _data );
-      if ( ! _trans )
-        TMat->_trans = true;
-      return TMat;
+      LocalMatrix<T> * C = new LocalMatrix<T>( _m, _n, _ld, _data );
+      C->_trans = ! _trans;
+      return C;
+    }
+
+    inline T&
+    operator()( long i, long j ) const
+    {
+      return _trans ? _data[j + i * _ld] : _data[i + _ld * j];
+    }
+
+    inline T&
+    operator()( long i ) const
+    {
+#ifndef NOCHECK
+      assert( ( m() == 1 &&   _trans ) ||
+              ( n() == 1 && ! _trans ) );
+#endif
+      return _data[i];
+    }
+
+    LocalMatrix<T> &
+    operator=( T val )
+    {
+      for ( long j = 0; j < n(); j++ )
+        for ( long i = 0; i < m(); i++ )
+          (*this)( i, j ) = val;
+      return *this;
     }
 
     LocalMatrix<T> *
-    operator*( LocalMatrix<T> &BMat )
+    operator+( LocalMatrix<T> &B ) const
     {
-      LocalMatrix<T> *CMat;
+      LocalMatrix<T> *C = new LocalMatrix<T>( _m, _n, _ld );
+      if ( _trans )
+        C->trans();
+#ifndef NOCHECK
+      assert( m() == B.m() );
+      assert( n() == B.n() );
+#endif
+      for ( long j = 0; j < n(); j++ )
+        for ( long i = 0; i < m(); i++ )
+          (*C)( i, j ) = (*this)( i, j ) + B( i, j );
+      return C;
+    }
+
+    LocalMatrix<T> *
+    operator-( LocalMatrix<T> &B ) const
+    {
+      LocalMatrix<T> *C = new LocalMatrix<T>( _m, _n, _ld );
+      if ( _trans )
+        C->trans();
+#ifndef NOCHECK
+      assert( m() == B.m() );
+      assert( n() == B.n() );
+#endif
+      for ( long j = 0; j < n(); j++ )
+        for ( long i = 0; i < m(); i++ )
+          (*C)( i, j ) = (*this)( i, j ) - B( i, j );
+      return C;
+    }
+
+    LocalMatrix<T> &
+    operator+=( LocalMatrix<T> &B )
+    {
+#ifndef NOCHECK
+      assert( m() == B.m() );
+      assert( n() == B.n() );
+#endif
+      for ( long j = 0; j < n(); j++ )
+        for ( long i = 0; i < m(); i++ )
+          (*this)( i, j ) += B( i, j );
+      return *this;
+    }
+
+    LocalMatrix<T> &
+    operator-=( LocalMatrix<T> &B )
+    {
+#ifndef NOCHECK
+      assert( m() == B.m() );
+      assert( n() == B.n() );
+#endif
+      for ( long j = 0; j < n(); j++ )
+        for ( long i = 0; i < m(); i++ )
+          (*this)( i, j ) -= B( i, j );
+      return *this;
+    }
+
+    LocalMatrix<T> *
+    operator*( LocalMatrix<T> &B ) const
+    {
+      LocalMatrix<T> *C;
       T alpha = 1.0, beta = 0.0;
 
       // check on _view_ dimenions
-      assert( n() == BMat.m() );
+      assert( n() == B.m() );
 
-      // allocate storage for result
-      CMat = new LocalMatrix<T>( m(), BMat.n() );
+      C = new LocalMatrix<T>( m(), B.n() );
 
-      if ( BMat._n == 1 )
+      if ( B.n() == 1 )
         {
-          // matrix-vector multiply
+#ifndef NOCHECK
+          assert( ! B._trans ||
+                  ( B._trans && B._ld == 1 ) );
+#endif
           char transa;
           int m, n, lda;
           int one = 1;
-          m = _m; // rows of A
-          n = _n; // cols of A
+          m = _m; // true rows of A
+          n = _n; // true cols of A
           lda = _ld;
           transa = _trans ? 'T' : 'N';
           gemv( &transa,
                 &m, &n,
                 &alpha,
                 _data, &lda,
-                BMat._data, &one,
+                B._data, &one,
                 &beta,
-                CMat->_data, &one );
+                C->_data, &one );
         }
       else
         {
-          // matrix-matrix multiply
           int m, n, k, lda, ldb, ldc;
           char transa, transb;
-          m = _trans ? _n : _m;               // rows of op( A )
-          n = BMat._trans? BMat._m : BMat._n; // cols of op( B )
-          k = _trans ? _m : _n;               // cols of op( A )
+          m = m();   // rows of op( A )
+          n = B.n(); // cols of op( B )
+          k = n();   // cols of op( A )
           lda = _ld;
-          ldb = BMat._ld;
-          ldc = CMat->_ld;
+          ldb = B._ld;
+          ldc = C->_ld;
           transa = _trans ? 'T' : 'N';
-          transb = BMat._trans ? 'T' : 'N';
+          transb = B._trans ? 'T' : 'N';
           gemm( &transa, &transb,
                 &m, &n, &k,
                 &alpha,
                 _data, &lda,
-                BMat._data, &ldb,
+                B._data, &ldb,
                 &beta,
-                CMat->_data, &ldc );
+                C->_data, &ldc );
         }
 
-      return CMat;
+      return C;
     }
 
   }; // end of LocalMatrix
@@ -296,7 +302,7 @@ namespace cm
   class Bin
   {
 
-  private:
+   private:
 
     int _remote_tid;
     upcxx::global_ptr<T> _g_remote_data;
@@ -310,13 +316,11 @@ namespace cm
       _data.clear();
     }
 
-  public:
+   public:
 
-    Bin( upcxx::global_ptr<T> g_remote_data )
-    {
-      _remote_tid = g_remote_data.tid();
-      _g_remote_data = g_remote_data;
-    }
+    Bin( upcxx::global_ptr<T> g_remote_data ) :
+      _remote_tid(g_remote_data.tid()), _g_remote_data(g_remote_data)
+    {}
 
     inline void
     append( T data, long ij )
@@ -378,10 +382,11 @@ namespace cm
   class ConvergentMatrix
   {
 
-  private:
+   private:
 
     long _m, _n;
     long _nbr, _nbc;
+    long _myrow, _mycol;
     int _flush_counter;
     int _progress_interval;
     int _bin_flush_threshold;
@@ -434,34 +439,30 @@ namespace cm
         }
     }
 
-  public:
+   public:
 
-    ConvergentMatrix( long m, long n )
+    ConvergentMatrix( long m, long n ) :
+      _m(m), _n(n)
     {
       long ld_req;
-      long myrow, mycol;
 
       // checks on matrix dimension
-      assert( m > 0 );
-      assert( n > 0 );
+      assert( _m > 0 );
+      assert( _n > 0 );
 
       // check on block-cyclic distribution
       assert( NPCOL * NPROW == THREADS );
 
-      // store args
-      _m = m;
-      _n = n;
-
       // setup block-cyclic distribution
-      myrow = MYTHREAD / NPROW;
-      mycol = MYTHREAD % NPCOL;
-      _nbr = _m / ( MB * NPROW ) + ( _m % ( MB * NPROW ) > myrow * MB ? 1 : 0 );
-      _nbc = _n / ( NB * NPCOL ) + ( _n % ( NB * NPCOL ) > mycol * NB ? 1 : 0 );
+      _myrow = MYTHREAD / NPROW;
+      _mycol = MYTHREAD % NPCOL;
+      _nbr = _m / ( MB * NPROW ) + ( _m % ( MB * NPROW ) > _myrow * MB ? 1 : 0 );
+      _nbc = _n / ( NB * NPCOL ) + ( _n % ( NB * NPCOL ) > _mycol * NB ? 1 : 0 );
 #ifdef DEBUG_MSGS
       std::cout << "[" << __func__ << "] "
                 << "Thread " << MYTHREAD
-                << " [ " << myrow
-                << " / " << mycol
+                << " [ " << _myrow
+                << " / " << _mycol
                 << " ] " << _nbr << " x " << _nbc << " local blocks"
                 << std::endl;
 #endif
@@ -513,7 +514,7 @@ namespace cm
     }
 
     inline int
-    bin_flush_threshold()
+    bin_flush_threshold() const
     {
       return _bin_flush_threshold;
     }
@@ -525,7 +526,7 @@ namespace cm
     }
 
     inline int
-    progress_interval()
+    progress_interval() const
     {
       return _progress_interval;
     }
@@ -534,6 +535,18 @@ namespace cm
     progress_interval( int interval )
     {
       _progress_interval = interval;
+    }
+
+    inline void
+    pgrid_row() const
+    {
+      return _myrow;
+    }
+
+    inline void
+    pgrid_col() const
+    {
+      return _mycol;
     }
 
     // general case
@@ -608,5 +621,3 @@ namespace cm
   }; // end of ConvergentMatrix
 
 } // end of namespace cm
-
-#endif

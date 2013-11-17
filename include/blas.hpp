@@ -1,8 +1,7 @@
-#ifndef BLAS_H
-#define BLAS_H
+#pragma once
 
-/*
- * gemv ops
+/**
+ * Overloaded gemm() and gemv() operations for float and double
  */
 
 extern "C" void
@@ -47,10 +46,6 @@ gemv( char *t,
   dgemv_( t, m, n, alpha, a, lda, x, incx, beta, y, incy );
 }
 
-/*
- * gemm ops
- */
-
 extern "C" void
 sgemm_( char *ta, char *tb,
         int *m, int *n, int *k, 
@@ -92,5 +87,3 @@ gemm( char *ta, char *tb,
 {
   sgemm_( ta, tb, m, n, k, alpha, a, lda, b, ldb, beta, c, ldc );
 }
-
-#endif
