@@ -117,6 +117,12 @@ namespace cm
     inline T&
     operator()( long i, long j ) const
     {
+#ifndef NOCHECK
+      assert( i >= 0 );
+      assert( j >= 0 );
+      assert( i < m() );
+      assert( j < n() );
+#endif
       return _trans ? _data[j + i * _ld] : _data[i + _ld * j];
     }
 
