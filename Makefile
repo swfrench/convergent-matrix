@@ -8,15 +8,15 @@ include $(UPCXX_PATH)/include/upcxx.mak
 I = include
 
 # compilation
-CXXFLAGS += $(UPCXX_CXXFLAGS) -I$I
+CXXFLAGS += $(UPCXX_CXXFLAGS) -I$I -I.
 
 # dirs
 O = obj
 B = bin
 
 # build products
-OBJ = $O/large_example.o
-BIN = $B/large_example.x
+OBJ = $O/run_ext_test.o
+BIN = $B/run_ext_test.x
 
 ####
 

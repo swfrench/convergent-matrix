@@ -277,6 +277,9 @@ namespace cm
     T *p_data, *p_my_data;
 
 #if defined(DEBUG_MSGS) || defined(ASYNC_DEBUG_MSGS)
+    assert( g_my_data.tid() == MYTHREAD );
+    assert( g_ix.tid() == MYTHREAD );
+    assert( g_data.tid() == MYTHREAD );
     std::cout << "[" << __func__ << "] "
               << "Thread " << MYTHREAD << " "
               << "performing async update of size " << size
@@ -566,11 +569,11 @@ namespace cm
       for ( long j = 0; j < Mat->n(); j++ )
         {
           int pcol = ( jx[j] / NB ) % NPCOL;
-          long off_j = LLD * ( jx[j] / ( NB * NPCOL ) * NB + jx[j] % NB );
+          long off_j = LLD * ( ( jx[j] / ( NB * NPCOL ) ) * NB + jx[j] % NB );
           for ( long i = 0; i < Mat->m(); i++ )
             {
               int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
-              long ij = off_j + ix[i] / ( MB * NPROW ) * MB + ix[i] % MB;
+              long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
               _bins[tid]->append( (*Mat)( i, j ), ij );
             }
         }
@@ -591,13 +594,14 @@ namespace cm
       for ( long j = 0; j < Mat->n(); j++ )
         {
           int pcol = ( ix[j] / NB ) % NPCOL;
-          long off_j = LLD * ( ix[j] / ( NB * NPCOL ) * NB + ix[j] % NB );
-          for ( long i = j; i < Mat->m(); i++ )
-            {
-              int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
-              long ij = off_j + ix[i] / ( MB * NPROW ) * MB + ix[i] % MB;
-              _bins[tid]->append( (*Mat)( i, j ), ij );
-            }
+          long off_j = LLD * ( ( ix[j] / ( NB * NPCOL ) ) * NB + ix[j] % NB );
+          for ( long i = 0; i < Mat->m(); i++ )
+            if ( ix[i] <= ix[j] )
+              {
+                int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
+                long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
+                _bins[tid]->append( (*Mat)( i, j ), ij );
+              }
         }
 
       // possibly flush bins
