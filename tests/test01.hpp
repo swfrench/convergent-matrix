@@ -16,10 +16,11 @@ gen_test01( int rank, long **msub, long ***inds, T **data )
   srand( ( 1 + rank ) * time( NULL ) );
 
   // determine number of local iters
-  if ( NITER_MIN == NITER_MAX )
-    niter = NITER_MIN;
-  else
-    niter = NITER_MIN + ( rand() % ( NITER_MAX - NITER_MIN ) );
+#if NITER_MIN == NITER_MAX
+  niter = NITER_MIN;
+#else
+  niter = NITER_MIN + ( rand() % ( NITER_MAX - NITER_MIN ) );
+#endif
 
   // allocate iter size / indexing
   *msub = new long[niter];
