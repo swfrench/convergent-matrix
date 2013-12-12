@@ -30,6 +30,10 @@
 #include <cassert>
 #include <upcxx.h>
 
+#ifdef TEST_CONSISTENCY
+#include "mpi.h"
+#endif
+
 // overloaded definitions of gemm() and gemv() for double and float
 #include "blas.hpp"
 
@@ -104,6 +108,12 @@ namespace cm
     n() const
     {
       return _trans ? _m : _n;
+    }
+
+    inline T *
+    data() const
+    {
+      return _data;
     }
 
     LocalMatrix<T> *
@@ -404,6 +414,9 @@ namespace cm
     std::vector<Bin<T> *> _bins;
     upcxx::event _e;
     upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
+#ifdef TEST_CONSISTENCY
+    LocalMatrix<T> * record;
+#endif
 
     // drain the entire task queue
     inline void
@@ -454,6 +467,9 @@ namespace cm
       _m(m), _n(n)
     {
       long ld_req;
+#ifdef TEST_CONSISTENCY
+      int mpi_init;
+#endif
 
       // checks on matrix dimension
       assert( _m > 0 );
@@ -505,6 +521,16 @@ namespace cm
 
       // set _frozen to false, and we're open for business
       _frozen = false;
+
+#ifdef TEST_CONSISTENCY
+      std::cout << "[" << __func__ << "] "
+                << "Thread " << MYTHREAD
+                << " Initialized in consistency test mode"
+                << std::endl;
+      record = new LocalMatrix<T>( _m, _n );
+      assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
+      assert( mpi_init );
+#endif
     }
 
     ~ConvergentMatrix()
@@ -575,6 +601,9 @@ namespace cm
               int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
               long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
               _bins[tid]->append( (*Mat)( i, j ), ij );
+#ifdef TEST_CONSISTENCY
+              (*record)( ix[i], jx[j] ) += (*Mat)( i, j );
+#endif
             }
         }
 
@@ -601,12 +630,65 @@ namespace cm
                 int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
                 long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
                 _bins[tid]->append( (*Mat)( i, j ), ij );
+#ifdef TEST_CONSISTENCY
+                (*record)( ix[i], ix[j] ) += (*Mat)( i, j );
+#endif
               }
         }
 
       // possibly flush bins
       flush( _bin_flush_threshold );
     }
+
+#ifdef TEST_CONSISTENCY
+
+    inline void
+    sum_updates( float *updates )
+    {
+      MPI_Allreduce( MPI_IN_PLACE, updates, _m * _n, MPI_FLOAT, MPI_SUM,
+                     MPI_COMM_WORLD );
+    }
+
+    inline void
+    sum_updates( double *updates )
+    {
+      MPI_Allreduce( MPI_IN_PLACE, updates, _m * _n, MPI_DOUBLE, MPI_SUM,
+                     MPI_COMM_WORLD );
+    }
+
+    inline void
+    consistency_check( T *updates )
+    {
+      long ncheck = 0;
+      // sum the recorded updates across threads
+      sum_updates( updates );
+      // ensure the locally-owned data is consistent with the record
+      std::cout << "[" << __func__ << "] "
+                << "Thread " << MYTHREAD
+                << " Consistency check start ..."
+                << std::endl;
+      for ( long j = 0; j < _n; j++ )
+        {
+          if ( ( j / NB ) % NPCOL == _mycol )
+            {
+              long off_j = LLD * ( ( j / ( NB * NPCOL ) ) * NB + j % NB );
+              for ( long i = 0; i < _m; i++ )
+                if ( ( i / MB ) % NPROW == _myrow )
+                  {
+                    long ij = off_j + ( i / ( MB * NPROW ) ) * MB + i % MB;
+                    assert( updates[i + _m * j] == _local_ptr[ij] );
+                    ncheck += 1;
+                  }
+            }
+        }
+      std::cout << "[" << __func__ << "] "
+                << "Thread " << MYTHREAD
+                << " Consistency check PASSED for "
+                << ncheck << " local entries"
+                << std::endl;
+    }
+
+#endif // TEST_CONSISTENCY
 
     // drain the bins, stop accepting updates
     inline void
@@ -626,6 +708,11 @@ namespace cm
       upcxx::barrier();
       // stop accepting updates
       _frozen = true;
+      // if enabled, the consistency check should only occur after freeze
+#ifdef TEST_CONSISTENCY
+      consistency_check( record->data() );
+      delete record;
+#endif
     }
 
   }; // end of ConvergentMatrix
