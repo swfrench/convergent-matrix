@@ -31,7 +31,8 @@
 #include <upcxx.h>
 
 #ifdef TEST_CONSISTENCY
-#include "mpi.h"
+#include <cmath>
+#include <mpi.h>
 #endif
 
 // overloaded definitions of gemm() and gemv() for double and float
@@ -660,6 +661,7 @@ namespace cm
     consistency_check( T *updates )
     {
       long ncheck = 0;
+      const T rtol = 1e-8;
       // sum the recorded updates across threads
       sum_updates( updates );
       // ensure the locally-owned data is consistent with the record
@@ -676,7 +678,13 @@ namespace cm
                 if ( ( i / MB ) % NPROW == _myrow )
                   {
                     long ij = off_j + ( i / ( MB * NPROW ) ) * MB + i % MB;
-                    assert( updates[i + _m * j] == _local_ptr[ij] );
+                    T rres;
+                    if ( updates[i + _m * j] == 0.0 )
+                      rres = 0.0;
+                    else
+                      rres = std::abs( ( updates[i + _m * j] - _local_ptr[ij] )
+                                       / updates[i + _m * j] );
+                    assert( rres < rtol );
                     ncheck += 1;
                   }
             }
