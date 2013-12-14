@@ -68,7 +68,7 @@ gen_test01( int rank, long **msub, long ***inds, T **data )
   printf( "[%s] max update dimension is %li\n", __func__, msub_max );
 
   // create fake data for update
-  *data = new double[msub_max * msub_max];
+  *data = new T[msub_max * msub_max];
   srand48( ( rank + 1 ) * time( NULL ) );
   for ( long i = 0; i < msub_max * msub_max; i++ )
     (*data)[i] = drand48();
