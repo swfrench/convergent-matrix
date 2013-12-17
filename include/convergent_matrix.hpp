@@ -549,6 +549,12 @@ namespace cm
       return new LocalMatrix<T>( _nbr * MB, _nbc * NB, LLD, _local_ptr );
     }
 
+    inline T *
+    get_local_data()
+    {
+      return _local_ptr;
+    }
+
     inline int
     bin_flush_threshold() const
     {
