@@ -5,12 +5,12 @@
 
 #define TESTNAME "test01"
 
-template <typename T>
+template <typename T, typename I>
 int
-gen_test01( int rank, long **msub, long ***inds, T **data )
+gen_test01( int rank, I **msub, I ***inds, T **data )
 {
   int niter;
-  long msub_max;
+  I msub_max;
 
   // seed the rng
   srand( ( 1 + rank ) * time( NULL ) );
@@ -23,8 +23,8 @@ gen_test01( int rank, long **msub, long ***inds, T **data )
 #endif
 
   // allocate iter size / indexing
-  *msub = new long[niter];
-  *inds = new long * [niter];
+  *msub = new I[niter];
+  *inds = new I * [niter];
 
   // derive sparse permuted updates
   msub_max = 0;
@@ -36,12 +36,12 @@ gen_test01( int rank, long **msub, long ***inds, T **data )
     (*msub)[i] = MSUB_REPS * rep_size;
 
     // fill sparse index (repeating sub-structure)
-    (*inds)[i] = new long[(*msub)[i]];
+    (*inds)[i] = new I[(*msub)[i]];
     for ( int r = 0; r < MSUB_REPS; r++ )
       if ( r == 0 )
         for ( int j = 0; j < rep_size; j++ )
           {
-            long prop;
+            I prop;
             bool ok = false;
             while ( ! ok )
               {

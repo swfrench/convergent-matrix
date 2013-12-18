@@ -71,10 +71,10 @@ int
 main( int argc, char **argv )
 {
   cmat_t *dist_mat;
-  cm::LocalMatrix<double> *local_mat;
   int niter;
   long *nxs, **ixs;
   double *data;
+  double *local_data;
 
   // init upcxx
   upcxx::init( &argc, &argv );
@@ -90,7 +90,7 @@ main( int argc, char **argv )
   printf( "%4i : up - using test \"%s\"\n", MYTHREAD, TESTNAME ); fflush( stdout );
 
   // generate test case
-  niter = gen_test01<double>( MYTHREAD, &nxs, &ixs, &data );
+  niter = gen_test01<double, long>( MYTHREAD, &nxs, &ixs, &data );
 
   printf( "%4i : generated %i rounds of fake update indexing\n",
           MYTHREAD, niter ); fflush( stdout );
@@ -126,9 +126,8 @@ main( int argc, char **argv )
   printf( "%4i : total time spent in update / freeze %fs\n", MYTHREAD, wt_tot ); fflush( stdout );
 
   // fetch the local PBLAS-compatible block-cyclic storage array
-  local_mat = dist_mat->as_local_matrix();
-  local_mat->override_free();
-  printf( "%4i : local_mat(0,0) = %f\n", MYTHREAD, (*local_mat)(0,0) );
+  local_data = dist_mat->get_local_data();
+  printf( "%4i : local_data[0] = %f\n", MYTHREAD, local_data[0] );
   upcxx::barrier();
 
   // safe to delete dist_mat now
