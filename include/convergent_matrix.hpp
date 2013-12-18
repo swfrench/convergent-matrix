@@ -371,7 +371,23 @@ namespace cm
       return _mycol;
     }
 
-    // general case
+    // remote random access (read only)
+    inline T
+    operator()( long ix, long jx )
+    {
+#ifndef NOCHECK
+      assert( _frozen );
+#endif
+      T value;
+      int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
+      long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
+                        ( ix / ( MB * NPROW ) ) * MB + ix % MB;
+      upcxx::copy( (upcxx::global_ptr<T>) (_g_ptrs[tid]) + ij,
+                   (upcxx::global_ptr<T>) (&value), 1 );
+      return value;
+    }
+
+    // distributed matrix update: general case
     void
     update( LocalMatrix<T> *Mat, long *ix, long *jx )
     {
@@ -398,7 +414,7 @@ namespace cm
       flush( _bin_flush_threshold );
     }
 
-    // symmetric case
+    // distributed matrix update: symmetric case
     void
     update( LocalMatrix<T> *Mat, long *ix )
     {

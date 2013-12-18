@@ -128,6 +128,7 @@ main( int argc, char **argv )
   // fetch the local PBLAS-compatible block-cyclic storage array
   local_data = dist_mat->get_local_data();
   printf( "%4i : local_data[0] = %f\n", MYTHREAD, local_data[0] );
+  printf( "%4i : dist_mat( 64, 64 ) = %f\n", MYTHREAD, (*dist_mat)( 64, 64 ) );
   upcxx::barrier();
 
   // safe to delete dist_mat now
