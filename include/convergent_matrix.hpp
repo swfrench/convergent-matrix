@@ -326,17 +326,12 @@ namespace cm
         delete _bins[tid];
     }
 
-    // returns view of local block-cyclic storage as a LocalMatrix
-    // ** no copy is performed - may continue to mutate if called before freeze() **
-    inline LocalMatrix<T> *
-    as_local_matrix()
-    {
-      return new LocalMatrix<T>( _nbr * MB, _nbc * NB, LLD, _local_ptr );
-    }
-
     inline T *
     get_local_data()
     {
+#ifndef NOCHECK
+      assert( ! _frozen );
+#endif
       return _local_ptr;
     }
 
