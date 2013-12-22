@@ -378,13 +378,12 @@ namespace cm
 #ifndef NOCHECK
       assert( _frozen );
 #endif
-      T value;
+      T val;
       int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
       long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
                         ( ix / ( MB * NPROW ) ) * MB + ix % MB;
-      upcxx::copy( (upcxx::global_ptr<T>) (_g_ptrs[tid]) + ij,
-                   (upcxx::global_ptr<T>) (&value), 1 );
-      return value;
+      upcxx::copy( _g_ptrs[tid].get() + ij, (upcxx::global_ptr<T>)(&val), 1 );
+      return val;
     }
 
     // distributed matrix update: general case
