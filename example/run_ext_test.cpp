@@ -3,9 +3,12 @@
 #include <ctime>
 #include <cassert>
 
-#ifdef USE_MPI_WTIME
+#if ( defined(USE_MPI_WTIME) || \
+      defined(TEST_CONSISTENCY) )
 #include <mpi.h>
-#else
+#endif
+
+#ifndef USE_MPI_WTIME
 #include <omp.h>
 #endif
 
@@ -82,10 +85,12 @@ main( int argc, char **argv )
   assert( THREADS == NPROW * NPCOL );
 
   // init MPI for tests
+#ifdef TEST_CONSISTENCY
   int mpi_init;
   MPI_Initialized( &mpi_init );
   if ( ! mpi_init )
     MPI_Init( &argc, &argv );
+#endif
 
   printf( "%4i : up - using test \"%s\"\n", MYTHREAD, TESTNAME ); fflush( stdout );
 
