@@ -333,10 +333,26 @@ namespace cm
     inline T *
     get_local_data()
     {
-#ifndef NOCHECK
       assert( _frozen );
-#endif
       return _local_ptr;
+    }
+
+    inline void
+    reset()
+    {
+      // must already be in frozen state (all updates committed)
+      assert( _frozen );
+      // zero local storage
+      for ( long ij = 0; ij < LLD * _nbc * NB; ij++ )
+        _local_ptr[ij] = (T) 0;
+      // unfreeze
+      _frozen = false;
+#ifdef TEST_CONSISTENCY
+      // reset consistency check ground truth as well
+      _record = new LocalMatrix<T>( _m, _n );
+#endif
+      // must be called by all threads
+      upcxx::barrier();
     }
 
     inline int
