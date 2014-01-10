@@ -334,7 +334,7 @@ namespace cm
     get_local_data()
     {
 #ifndef NOCHECK
-      assert( ! _frozen );
+      assert( _frozen );
 #endif
       return _local_ptr;
     }
