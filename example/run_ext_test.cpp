@@ -122,13 +122,13 @@ main( int argc, char **argv )
       delete GtG;
     }
 
-  // freeze the ConvergentMatrix abstraction
-  printf( "%4i : freezing ...\n", MYTHREAD ); fflush( stdout );
-  // track freeze time
+  // commit all updates to the ConvergentMatrix abstraction
+  printf( "%4i : committing ...\n", MYTHREAD ); fflush( stdout );
+  // track commit time
   wt_tot -= get_wtime();
-  dist_mat->freeze();
+  dist_mat->commit();
   wt_tot += get_wtime();
-  printf( "%4i : total time spent in update / freeze %fs\n", MYTHREAD, wt_tot ); fflush( stdout );
+  printf( "%4i : total time spent in update / commit %fs\n", MYTHREAD, wt_tot ); fflush( stdout );
 
   // fetch the local PBLAS-compatible block-cyclic storage array
   local_data = dist_mat->get_local_data();

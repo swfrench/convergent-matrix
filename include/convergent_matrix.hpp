@@ -202,7 +202,7 @@ namespace cm
     upcxx::event _e;
     upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
 #ifdef TEST_CONSISTENCY
-    LocalMatrix<T> * record;
+    LocalMatrix<T> * _record;
 #endif
 
     // drain the entire task queue
@@ -317,7 +317,7 @@ namespace cm
                 << "Thread " << MYTHREAD
                 << " Initialized in consistency test mode"
                 << std::endl;
-      record = new LocalMatrix<T>( _m, _n );
+      _record = new LocalMatrix<T>( _m, _n );
       assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
       assert( mpi_init );
 #endif
@@ -407,7 +407,7 @@ namespace cm
               long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
               _bins[tid]->append( (*Mat)( i, j ), ij );
 #ifdef TEST_CONSISTENCY
-              (*record)( ix[i], jx[j] ) += (*Mat)( i, j );
+              (*_record)( ix[i], jx[j] ) += (*Mat)( i, j );
 #endif
             }
         }
@@ -436,7 +436,7 @@ namespace cm
                 long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
                 _bins[tid]->append( (*Mat)( i, j ), ij );
 #ifdef TEST_CONSISTENCY
-                (*record)( ix[i], ix[j] ) += (*Mat)( i, j );
+                (*_record)( ix[i], ix[j] ) += (*Mat)( i, j );
 #endif
               }
         }
@@ -504,7 +504,7 @@ namespace cm
 
     // drain the bins, stop accepting updates
     inline void
-    freeze()
+    commit()
     {
       // synchronize
       upcxx::barrier();
@@ -520,10 +520,10 @@ namespace cm
       upcxx::barrier();
       // stop accepting updates
       _frozen = true;
-      // if enabled, the consistency check should only occur after freeze
+      // if enabled, the consistency check should only occur after commit
 #ifdef TEST_CONSISTENCY
-      consistency_check( record->data() );
-      delete record;
+      consistency_check( _record->data() );
+      delete _record;
 #endif
     }
 
