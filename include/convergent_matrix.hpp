@@ -196,8 +196,9 @@ namespace cm
     int _progress_interval;
     int _bin_flush_threshold;
     bool _frozen;
-    T *_local_ptr;
     std::vector<Bin<T> *> _bins;
+    T *_local_ptr;
+    upcxx::global_ptr<T> _g_local_ptr;
     upcxx::event _e;
     upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
 #ifdef TEST_CONSISTENCY
@@ -287,9 +288,12 @@ namespace cm
       // (2) initialize shared_array of global pointers
       _g_ptrs.init( THREADS );
 
-      // (3) allocate and zero storage; cast to global_ptr and write to _g_ptrs
-      _local_ptr = new T [LLD * _nbc * NB]();
-      _g_ptrs[MYTHREAD] = (upcxx::global_ptr<T>)(_local_ptr);
+      // (3) allocate and zero storage; write to _g_ptrs
+      _g_local_ptr = upcxx::allocate<T>( MYTHREAD, LLD * _nbc * NB );
+      _local_ptr = (T *) _g_local_ptr;
+      for ( long ij = 0; ij < LLD * _nbc * NB; ij++ )
+        _local_ptr[ij] = (T) 0;
+      _g_ptrs[MYTHREAD] = _g_local_ptr;
       upcxx::barrier();
 
       // set flush threashold for bins
@@ -321,9 +325,9 @@ namespace cm
 
     ~ConvergentMatrix()
     {
-      // it is assumed that the user will free _local_ptr
       for ( int tid = 0; tid < THREADS; tid++ )
         delete _bins[tid];
+      upcxx::deallocate<T>( _g_local_ptr );
     }
 
     inline T *
@@ -378,12 +382,11 @@ namespace cm
 #ifndef NOCHECK
       assert( _frozen );
 #endif
-      T val;
       int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
       long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
                         ( ix / ( MB * NPROW ) ) * MB + ix % MB;
-      upcxx::copy( _g_ptrs[tid].get() + ij, (upcxx::global_ptr<T>)(&val), 1 );
-      return val;
+      // temporary hack: long index into global_ptr not currently supported
+      return _g_ptrs[tid].get() [(int)ij];
     }
 
     // distributed matrix update: general case
