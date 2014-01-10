@@ -7,7 +7,7 @@ supporting asynchronous updates.
 This abstraction is "convergent" in that updates are cached locally and applied
 to the distributed matrix asynchronously. The global distributed matrix is
 guaranteed to converge to its final state some time after all updates have been
-applied and we call `ConvergentMatrix::freeze()`.
+applied and we call `ConvergentMatrix::commit()`.
 
 TODO
 ----
