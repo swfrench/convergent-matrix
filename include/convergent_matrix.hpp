@@ -279,6 +279,10 @@ namespace cm
                 << std::endl;
 #endif
 
+      // ensure local storage is of nonzero size
+      assert( _nbr > 0 );
+      assert( _nbc > 0 );
+
       // allocate local storage, exchange global ptrs ...
 
       // (1) check minimum local leading dimension
