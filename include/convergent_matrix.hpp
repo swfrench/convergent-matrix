@@ -383,16 +383,58 @@ namespace cm
       _progress_interval = interval;
     }
 
-    inline void
+    inline long
     pgrid_row() const
     {
       return _myrow;
     }
 
-    inline void
+    inline long
     pgrid_col() const
     {
       return _mycol;
+    }
+
+    inline long
+    m() const
+    {
+      return _m;
+    }
+
+    inline long
+    n() const
+    {
+      return _n;
+    }
+
+    inline long
+    pgrid_nrow() const
+    {
+      return NPROW;
+    }
+
+    inline long
+    pgrid_ncol() const
+    {
+      return NPCOL;
+    }
+
+    inline long
+    mb() const
+    {
+      return MB;
+    }
+
+    inline long
+    nb() const
+    {
+      return NB;
+    }
+
+    inline long
+    lld() const
+    {
+      return LLD;
     }
 
     // remote random access (read only)
