@@ -190,8 +190,8 @@ namespace cm
    private:
 
     long _m, _n;
-    long _nbr, _nbc;
     long _myrow, _mycol;
+    long _m_local, _n_local;
     int _flush_counter;
     int _progress_interval;
     int _bin_flush_threshold;
@@ -248,12 +248,32 @@ namespace cm
         }
     }
 
+    // determine lower bound on local storage for a given block-cyclic
+    // distribution
+    inline long
+    roc( long m,   // matrix dimension
+         long np,  // dimension of the process grid
+         long ip,  // index in the process grid
+         long mb ) // blocking factor
+    {
+      long nblocks, m_local;
+      // number of full blocks to be distributed
+      nblocks = m / mb;
+      // set lower bound on required local dimension
+      m_local = ( nblocks / np ) * mb;
+      // edge cases ...
+      if ( nblocks % np > ip )
+        m_local += mb; // process ip receives another full block
+      else if ( nblocks % np == ip )
+        m_local += m % mb; // process ip _may_ receive a partial block
+      return m_local;
+    }
+
    public:
 
     ConvergentMatrix( long m, long n ) :
       _m(m), _n(n)
     {
-      long ld_req;
 #ifdef TEST_CONSISTENCY
       int mpi_init;
 #endif
@@ -268,14 +288,16 @@ namespace cm
       // setup block-cyclic distribution
       _myrow = MYTHREAD / NPROW;
       _mycol = MYTHREAD % NPCOL;
-      _nbr = _m / ( MB * NPROW ) + ( _m % ( MB * NPROW ) > _myrow * MB ? 1 : 0 );
-      _nbc = _n / ( NB * NPCOL ) + ( _n % ( NB * NPCOL ) > _mycol * NB ? 1 : 0 );
+      // calculate minimum req'd local dimensions
+      _m_local = roc( _m, NPROW, _myrow, MB );
+      _n_local = roc( _n, NPCOL, _mycol, NB );
 #ifdef DEBUG_MSGS
       std::cout << "[" << __func__ << "] "
                 << "Thread " << MYTHREAD
                 << " [ " << _myrow
                 << " / " << _mycol
-                << " ] " << _nbr << " x " << _nbc << " local blocks"
+                << " ] minimum local storage dimension: "
+                << _m_local << " x " << _n_local
                 << std::endl;
 #endif
 
@@ -286,16 +308,15 @@ namespace cm
       // allocate local storage, exchange global ptrs ...
 
       // (1) check minimum local leading dimension
-      ld_req = _nbr * MB;
-      assert( ld_req <= LLD );
+      assert( _m_local <= LLD );
 
       // (2) initialize shared_array of global pointers
       _g_ptrs.init( THREADS );
 
       // (3) allocate and zero storage; write to _g_ptrs
-      _g_local_ptr = upcxx::allocate<T>( MYTHREAD, LLD * _nbc * NB );
+      _g_local_ptr = upcxx::allocate<T>( MYTHREAD, LLD * _n_local );
       _local_ptr = (T *) _g_local_ptr;
-      for ( long ij = 0; ij < LLD * _nbc * NB; ij++ )
+      for ( long ij = 0; ij < LLD * _n_local; ij++ )
         _local_ptr[ij] = (T) 0;
       _g_ptrs[MYTHREAD] = _g_local_ptr;
       upcxx::barrier();
@@ -347,7 +368,7 @@ namespace cm
       // must already be in frozen state (all updates committed)
       assert( _frozen );
       // zero local storage
-      for ( long ij = 0; ij < LLD * _nbc * NB; ij++ )
+      for ( long ij = 0; ij < LLD * _n_local; ij++ )
         _local_ptr[ij] = (T) 0;
       // unfreeze
       _frozen = false;
