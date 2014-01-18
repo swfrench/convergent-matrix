@@ -458,6 +458,18 @@ namespace cm
       return LLD;
     }
 
+    inline long
+    m_local() const
+    {
+      return _m_local;
+    }
+
+    inline long
+    n_local() const
+    {
+      return _n_local;
+    }
+
     // remote random access (read only)
     inline T
     operator()( long ix, long jx )
