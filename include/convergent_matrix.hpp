@@ -302,8 +302,8 @@ namespace cm
 #endif
 
       // ensure local storage is of nonzero size
-      assert( _nbr > 0 );
-      assert( _nbc > 0 );
+      assert( _m_local > 0 );
+      assert( _n_local > 0 );
 
       // allocate local storage, exchange global ptrs ...
 
