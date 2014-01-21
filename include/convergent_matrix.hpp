@@ -195,7 +195,6 @@ namespace cm
     int _flush_counter;
     int _progress_interval;
     int _bin_flush_threshold;
-    bool _frozen;
     std::vector<Bin<T> *> _bins;
     T *_local_ptr;
     upcxx::global_ptr<T> _g_local_ptr;
@@ -204,13 +203,6 @@ namespace cm
 #ifdef TEST_CONSISTENCY
     LocalMatrix<T> * _record;
 #endif
-
-    // drain the entire task queue
-    inline void
-    drain_task_queue()
-    {
-      upcxx::drain();
-    }
 
     // flush bins that are "full" (exceed the current threshold)
     inline void
@@ -242,7 +234,7 @@ namespace cm
       if ( thresh == 0 || _flush_counter == _progress_interval )
         {
           // drain the task queue
-          drain_task_queue();
+          upcxx::drain();
           // reset the counter
           _flush_counter = 0;
         }
@@ -334,9 +326,6 @@ namespace cm
       // init counter for initiating calls to progress()
       _flush_counter = 0;
 
-      // set _frozen to false, and we're open for business
-      _frozen = false;
-
 #ifdef TEST_CONSISTENCY
       std::cout << "[" << __func__ << "] "
                 << "Thread " << MYTHREAD
@@ -358,23 +347,18 @@ namespace cm
     inline T *
     get_local_data()
     {
-      assert( _frozen );
       return _local_ptr;
     }
 
     inline void
     reset()
     {
-      // must already be in frozen state (all updates committed)
-      assert( _frozen );
       // zero local storage
       for ( long ij = 0; ij < LLD * _n_local; ij++ )
         _local_ptr[ij] = (T) 0;
-      // unfreeze
-      _frozen = false;
 #ifdef TEST_CONSISTENCY
       // reset consistency check ground truth as well
-      _record = new LocalMatrix<T>( _m, _n );
+      (*_record) = (T) 0;
 #endif
       // must be called by all threads
       upcxx::barrier();
@@ -474,9 +458,6 @@ namespace cm
     inline T
     operator()( long ix, long jx )
     {
-#ifndef NOCHECK
-      assert( _frozen );
-#endif
       int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
       long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
                         ( ix / ( MB * NPROW ) ) * MB + ix % MB;
@@ -488,9 +469,6 @@ namespace cm
     void
     update( LocalMatrix<T> *Mat, long *ix, long *jx )
     {
-#ifndef NOCHECK
-      assert( ! _frozen );
-#endif
       // bin the local update
       for ( long j = 0; j < Mat->n(); j++ )
         {
@@ -516,7 +494,6 @@ namespace cm
     update( LocalMatrix<T> *Mat, long *ix )
     {
 #ifndef NOCHECK
-      assert( ! _frozen );
       assert( Mat->m() == Mat->n() );
 #endif
       // bin the local update
@@ -608,17 +585,14 @@ namespace cm
       // sync again (all locally-queued remote tasks have been dispatched)
       upcxx::barrier();
       // catch the last wave of tasks, if any
-      drain_task_queue();
+      upcxx::drain();
       // wait on remote tasks
       _e.wait();
       // done, sync on return
       upcxx::barrier();
-      // stop accepting updates
-      _frozen = true;
       // if enabled, the consistency check should only occur after commit
 #ifdef TEST_CONSISTENCY
       consistency_check( _record->data() );
-      delete _record;
 #endif
     }
 
