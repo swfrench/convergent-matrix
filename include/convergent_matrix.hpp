@@ -520,16 +520,16 @@ namespace cm
 #ifdef TEST_CONSISTENCY
 
     inline void
-    sum_updates( float *updates )
+    sum_updates( float *updates, float *summed_updates )
     {
-      MPI_Allreduce( MPI_IN_PLACE, updates, _m * _n, MPI_FLOAT, MPI_SUM,
+      MPI_Allreduce( updates, summed_updates, _m * _n, MPI_FLOAT, MPI_SUM,
                      MPI_COMM_WORLD );
     }
 
     inline void
-    sum_updates( double *updates )
+    sum_updates( double *updates, double *summed_updates )
     {
-      MPI_Allreduce( MPI_IN_PLACE, updates, _m * _n, MPI_DOUBLE, MPI_SUM,
+      MPI_Allreduce( updates, summed_updates, _m * _n, MPI_DOUBLE, MPI_SUM,
                      MPI_COMM_WORLD );
     }
 
@@ -538,8 +538,10 @@ namespace cm
     {
       long ncheck = 0;
       const T rtol = 1e-8;
+      T * summed_updates;
       // sum the recorded updates across threads
-      sum_updates( updates );
+      summed_updates = new T [_m * _n];
+      sum_updates( updates, summed_updates );
       // ensure the locally-owned data is consistent with the record
       std::cout << "[" << __func__ << "] "
                 << "Thread " << MYTHREAD
@@ -555,16 +557,17 @@ namespace cm
                   {
                     long ij = off_j + ( i / ( MB * NPROW ) ) * MB + i % MB;
                     T rres;
-                    if ( updates[i + _m * j] == 0.0 )
+                    if ( summed_updates[i + _m * j] == 0.0 )
                       rres = 0.0;
                     else
-                      rres = std::abs( ( updates[i + _m * j] - _local_ptr[ij] )
-                                       / updates[i + _m * j] );
+                      rres = std::abs( ( summed_updates[i + _m * j] - _local_ptr[ij] )
+                                       / summed_updates[i + _m * j] );
                     assert( rres < rtol );
                     ncheck += 1;
                   }
             }
         }
+      delete [] summed_updates;
       std::cout << "[" << __func__ << "] "
                 << "Thread " << MYTHREAD
                 << " Consistency check PASSED for "
