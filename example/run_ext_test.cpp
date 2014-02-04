@@ -4,12 +4,17 @@
 #include <cassert>
 
 #if ( defined(USE_MPI_WTIME) || \
-      defined(TEST_CONSISTENCY) )
+      defined(TEST_CONSISTENCY) || \
+      defined(MPIIO_SUPPORT) )
 #include <mpi.h>
+#define MPI_INIT_REQUIRED
 #endif
 
 #ifndef USE_MPI_WTIME
 #include <omp.h>
+#define WTIME omp_get_wtime
+#else
+#define WTIME MPI_Wtime
 #endif
 
 #include <upcxx.h>
@@ -60,16 +65,6 @@ typedef cm::ConvergentMatrix<double,NPROW,NPCOL,MB,NB,LLD> cmat_t;
 
 using namespace std;
 
-double
-get_wtime()
-{
-#ifdef USE_MPI_WTIME
-  return MPI_Wtime();
-#else
-  return omp_get_wtime();
-#endif
-}
-
 int
 main( int argc, char **argv )
 {
@@ -85,7 +80,7 @@ main( int argc, char **argv )
   assert( THREADS == NPROW * NPCOL );
 
   // init MPI for tests
-#ifdef TEST_CONSISTENCY
+#ifdef MPI_INIT_REQUIRED
   int mpi_init;
   MPI_Initialized( &mpi_init );
   if ( ! mpi_init )
@@ -116,19 +111,24 @@ main( int argc, char **argv )
       cm::LocalMatrix<double> *GtG;
       GtG = new cm::LocalMatrix<double>( nxs[r], nxs[r], data );
       // track update time
-      wt_tot -= get_wtime();
+      wt_tot -= WTIME();
       dist_mat->update( GtG, ixs[r] );
-      wt_tot += get_wtime();
+      wt_tot += WTIME();
       delete GtG;
     }
 
   // commit all updates to the ConvergentMatrix abstraction
   printf( "%4i : committing ...\n", MYTHREAD ); fflush( stdout );
   // track commit time
-  wt_tot -= get_wtime();
+  wt_tot -= WTIME();
   dist_mat->commit();
-  wt_tot += get_wtime();
+  wt_tot += WTIME();
   printf( "%4i : total time spent in update / commit %fs\n", MYTHREAD, wt_tot ); fflush( stdout );
+
+  // test the write functionality
+#ifdef MPIIO_SUPPORT
+  dist_mat->save( "test.matrix" );
+#endif
 
   // fetch the local PBLAS-compatible block-cyclic storage array
   local_data = dist_mat->get_local_data();
@@ -138,6 +138,10 @@ main( int argc, char **argv )
 
   // safe to delete dist_mat now
   delete dist_mat;
+
+#ifdef MPI_INIT_REQUIRED
+  MPI_Finalize();
+#endif
 
   // shut down upcxx
   upcxx::finalize();

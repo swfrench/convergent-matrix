@@ -36,6 +36,10 @@
 
 #ifdef TEST_CONSISTENCY
 #include <cmath>
+#endif
+
+#if ( defined(TEST_CONSISTENCY) || \
+      defined(MPIIO_SUPPORT) )
 #include <mpi.h>
 #endif
 
@@ -259,6 +263,24 @@ namespace cm
       else if ( nblocks % np == ip )
         m_local += m % mb; // process ip _may_ receive a partial block
       return m_local;
+    }
+
+    inline int
+    get_mpi_base_type( float *x )
+    {
+      return MPI_FLOAT;
+    }
+
+    inline int
+    get_mpi_base_type( double *x )
+    {
+      return MPI_DOUBLE;
+    }
+
+    inline
+    int get_mpi_base_type()
+    {
+      return get_mpi_base_type( _local_ptr );
     }
 
    public:
@@ -520,16 +542,10 @@ namespace cm
 #ifdef TEST_CONSISTENCY
 
     inline void
-    sum_updates( float *updates, float *summed_updates )
+    sum_updates( T *updates, T *summed_updates )
     {
-      MPI_Allreduce( updates, summed_updates, _m * _n, MPI_FLOAT, MPI_SUM,
-                     MPI_COMM_WORLD );
-    }
-
-    inline void
-    sum_updates( double *updates, double *summed_updates )
-    {
-      MPI_Allreduce( updates, summed_updates, _m * _n, MPI_DOUBLE, MPI_SUM,
+      int base_dtype = get_mpi_base_type();
+      MPI_Allreduce( updates, summed_updates, _m * _n, base_dtype, MPI_SUM,
                      MPI_COMM_WORLD );
     }
 
@@ -598,6 +614,77 @@ namespace cm
       consistency_check( _record->data() );
 #endif
     }
+
+#ifdef MPIIO_SUPPORT
+
+    // save the distributed matrix to disk via MPI-IO
+    // TODO: very C99 ... fix that
+    void
+    save( const char *fname )
+    {
+      int mpi_init, mpi_rank, distmat_size, write_count;
+      double wt_io, wt_io_max;
+      MPI_Status status;
+      MPI_Datatype distmat;
+      MPI_File f_ata;
+
+      // make sure we all get here
+      upcxx::barrier();
+
+      // make sure MPI is already initialized
+      assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
+      assert( mpi_init );
+
+      // check process grid ordering
+      MPI_Comm_rank( MPI_COMM_WORLD, &mpi_rank );
+      assert( _myrow * NPCOL + _mycol == mpi_rank );
+
+      // initialize distributed type
+      int gsizes[]   = { _m, _n },
+          distribs[] = { MPI_DISTRIBUTE_CYCLIC, MPI_DISTRIBUTE_CYCLIC },
+          dargs[]    = { MB, NB },
+          psizes[]   = { NPROW, NPCOL },
+          base_dtype = get_mpi_base_type();
+      MPI_Type_create_darray( NPCOL * NPROW, mpi_rank, 2,
+                              gsizes, distribs, dargs, psizes,
+                              MPI_ORDER_FORTRAN,
+                              base_dtype,
+                              &distmat );
+      MPI_Type_commit( &distmat );
+
+      // sanity check on check on distributed array data size
+      MPI_Type_size( distmat, &distmat_size );
+      assert( distmat_size / sizeof(T) == ( _m_local * _n_local ) );
+
+      // open read-only
+      MPI_File_open( MPI_COMM_WORLD, fname,
+                    MPI_MODE_CREATE | MPI_MODE_WRONLY,
+                    MPI_INFO_NULL, &f_ata );
+
+      // set view w/ distmat
+      MPI_File_set_view( f_ata, 0, base_dtype, distmat, "native", MPI_INFO_NULL );
+
+      // write out local data; close
+      wt_io = - MPI_Wtime();
+      MPI_File_write_all( f_ata, _local_ptr, _m_local * _n_local, base_dtype, &status );
+      wt_io = wt_io + MPI_Wtime();
+      MPI_File_close( &f_ata );
+      MPI_Reduce( &wt_io, &wt_io_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD );
+      if ( mpi_rank == 0 )
+        std::cout << "[" << __func__ << "] "
+                  << " max time spent in matrix write: "
+                  << wt_io_max << " s"
+                  << std::endl;
+
+      // sanity check on data written
+      MPI_Get_count( &status, base_dtype, &write_count );
+      assert( write_count == ( _m_local * _n_local ) );
+
+      // free distributed type
+      MPI_Type_free( &distmat );
+    }
+
+#endif // MPIIO_SUPPORT
 
   }; // end of ConvergentMatrix
 
