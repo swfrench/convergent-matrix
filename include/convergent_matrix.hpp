@@ -26,7 +26,8 @@
 
 #if ( defined(DEBUG_MSGS)       || \
       defined(ASYNC_DEBUG_MSGS) || \
-      defined(TEST_CONSISTENCY) )
+      defined(TEST_CONSISTENCY) || \
+      defined(MPIIO_SUPPORT) )
 #include <iostream>
 #endif
 #include <vector>
