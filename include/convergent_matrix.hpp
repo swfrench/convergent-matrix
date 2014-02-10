@@ -625,6 +625,7 @@ namespace cm
     {
       int mpi_init, mpi_rank, distmat_size, write_count;
       double wt_io, wt_io_max;
+      T *tmp_buffer;
       MPI_Status status;
       MPI_Datatype distmat;
       MPI_File f_ata;
@@ -665,10 +666,21 @@ namespace cm
       // set view w/ distmat
       MPI_File_set_view( f_ata, 0, base_dtype, distmat, "native", MPI_INFO_NULL );
 
-      // write out local data; close
+      // allocate and fill temporary buffer
+      tmp_buffer = new T [_m_local * _n_local];
+      for ( long j = 0; j < _n_local; j++ )
+        for ( long i = 0; i < _m_local; i++ )
+          tmp_buffer[i + j * _m_local] = _local_ptr[i + j * LLD];
+
+      // write out local data
       wt_io = - MPI_Wtime();
-      MPI_File_write_all( f_ata, _local_ptr, _m_local * _n_local, base_dtype, &status );
+      MPI_File_write_all( f_ata, tmp_buffer, _m_local * _n_local, base_dtype, &status );
       wt_io = wt_io + MPI_Wtime();
+
+      // free tmp_buffer asap
+      delete [] tmp_buffer;
+
+      // close; report io time
       MPI_File_close( &f_ata );
       MPI_Reduce( &wt_io, &wt_io_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD );
       if ( mpi_rank == 0 )
