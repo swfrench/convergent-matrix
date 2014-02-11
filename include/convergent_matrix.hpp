@@ -625,7 +625,6 @@ namespace cm
     {
       int mpi_init, mpi_rank, distmat_size, write_count;
       double wt_io, wt_io_max;
-      T *tmp_buffer;
       MPI_Status status;
       MPI_Datatype distmat;
       MPI_File f_ata;
@@ -642,7 +641,7 @@ namespace cm
       assert( _myrow * NPCOL + _mycol == mpi_rank );
 
       // initialize distributed type
-      int gsizes[]   = { _m, _n },
+      int gsizes[]   = { (int)_m, (int)_n },
           distribs[] = { MPI_DISTRIBUTE_CYCLIC, MPI_DISTRIBUTE_CYCLIC },
           dargs[]    = { MB, NB },
           psizes[]   = { NPROW, NPCOL },
@@ -666,19 +665,21 @@ namespace cm
       // set view w/ distmat
       MPI_File_set_view( f_ata, 0, base_dtype, distmat, "native", MPI_INFO_NULL );
 
-      // allocate and fill temporary buffer
-      tmp_buffer = new T [_m_local * _n_local];
-      for ( long j = 0; j < _n_local; j++ )
-        for ( long i = 0; i < _m_local; i++ )
-          tmp_buffer[i + j * _m_local] = _local_ptr[i + j * LLD];
+      // compaction in place
+      if ( _m_local < LLD ) {
+        std::cout << "[" << __func__ << "] "
+                  << "Thread " << MYTHREAD
+                  << " Performing in-place compaction before write"
+                  << std::endl;
+        for ( long j = 1; j < _n_local; j++ )
+          for ( long i = 0; i < _m_local; i++ )
+            _local_ptr[i + j * _m_local] = _local_ptr[i + j * LLD];
+      }
 
       // write out local data
       wt_io = - MPI_Wtime();
-      MPI_File_write_all( f_ata, tmp_buffer, _m_local * _n_local, base_dtype, &status );
+      MPI_File_write_all( f_ata, _local_ptr, _m_local * _n_local, base_dtype, &status );
       wt_io = wt_io + MPI_Wtime();
-
-      // free tmp_buffer asap
-      delete [] tmp_buffer;
 
       // close; report io time
       MPI_File_close( &f_ata );
@@ -692,6 +693,17 @@ namespace cm
       // sanity check on data written
       MPI_Get_count( &status, base_dtype, &write_count );
       assert( write_count == ( _m_local * _n_local ) );
+
+      // expansion in place
+      if ( _m_local < LLD ) {
+        std::cout << "[" << __func__ << "] "
+                  << "Thread " << MYTHREAD
+                  << " Performing in-place expansion after write"
+                  << std::endl;
+        for ( long j = _n_local - 1; j > 0; j-- )
+          for ( long i = _m_local - 1; i >= 0; i-- )
+            _local_ptr[i + j * LLD] = _local_ptr[i + j * _m_local];
+      }
 
       // free distributed type
       MPI_Type_free( &distmat );
