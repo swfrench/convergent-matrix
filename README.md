@@ -15,4 +15,5 @@ The global distributed matrix converges to its final state after all updates
 have been applied and the user calls `ConvergentMatrix::commit()`.
 
 [1] Y. Zheng, et al., "UPC++: A PGAS Extension for C++," accepted to IPDPS 2014.
+
 [2] http://gasnet.lbl.gov
