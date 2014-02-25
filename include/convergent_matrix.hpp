@@ -26,8 +26,8 @@
 
 #if ( defined(DEBUG_MSGS)       || \
       defined(ASYNC_DEBUG_MSGS) || \
-      defined(TEST_CONSISTENCY) || \
-      defined(MPIIO_SUPPORT) )
+      defined(ENABLE_CONSISTENCY_CHECK) || \
+      defined(ENABLE_MPIIO_SUPPORT) )
 #include <iostream>
 #endif
 #include <vector>
@@ -35,13 +35,14 @@
 
 #include <upcxx.h>
 
-#ifdef TEST_CONSISTENCY
+#ifdef ENABLE_CONSISTENCY_CHECK
 #include <cmath>
 #endif
 
-#if ( defined(TEST_CONSISTENCY) || \
-      defined(MPIIO_SUPPORT) )
+#if ( defined(ENABLE_CONSISTENCY_CHECK) || \
+      defined(ENABLE_MPIIO_SUPPORT) )
 #include <mpi.h>
+#define ENABLE_MPI_HELPERS
 #endif
 
 // LocalMatrix<T>
@@ -205,7 +206,7 @@ namespace cm
     upcxx::global_ptr<T> _g_local_ptr;
     upcxx::event _e;
     upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
-#ifdef TEST_CONSISTENCY
+#ifdef ENABLE_CONSISTENCY_CHECK
     LocalMatrix<T> * _record;
 #endif
 
@@ -266,6 +267,8 @@ namespace cm
       return m_local;
     }
 
+#ifdef ENABLE_MPI_HELPERS
+
     inline int
     get_mpi_base_type( float *x )
     {
@@ -284,15 +287,13 @@ namespace cm
       return get_mpi_base_type( _local_ptr );
     }
 
+#endif
+
    public:
 
     ConvergentMatrix( long m, long n ) :
       _m(m), _n(n)
     {
-#ifdef TEST_CONSISTENCY
-      int mpi_init;
-#endif
-
       // checks on matrix dimension
       assert( _m > 0 );
       assert( _n > 0 );
@@ -349,14 +350,12 @@ namespace cm
       // init counter for initiating calls to progress()
       _flush_counter = 0;
 
-#ifdef TEST_CONSISTENCY
+#ifdef ENABLE_CONSISTENCY_CHECK
       std::cout << "[" << __func__ << "] "
                 << "Thread " << MYTHREAD
                 << " Initialized in consistency test mode"
                 << std::endl;
       _record = new LocalMatrix<T>( _m, _n );
-      assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
-      assert( mpi_init );
 #endif
     }
 
@@ -379,7 +378,7 @@ namespace cm
       // zero local storage
       for ( long ij = 0; ij < LLD * _n_local; ij++ )
         _local_ptr[ij] = (T) 0;
-#ifdef TEST_CONSISTENCY
+#ifdef ENABLE_CONSISTENCY_CHECK
       // reset consistency check ground truth as well
       (*_record) = (T) 0;
 #endif
@@ -502,7 +501,7 @@ namespace cm
               int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
               long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
               _bins[tid]->append( (*Mat)( i, j ), ij );
-#ifdef TEST_CONSISTENCY
+#ifdef ENABLE_CONSISTENCY_CHECK
               (*_record)( ix[i], jx[j] ) += (*Mat)( i, j );
 #endif
             }
@@ -530,7 +529,7 @@ namespace cm
                 int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
                 long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
                 _bins[tid]->append( (*Mat)( i, j ), ij );
-#ifdef TEST_CONSISTENCY
+#ifdef ENABLE_CONSISTENCY_CHECK
                 (*_record)( ix[i], ix[j] ) += (*Mat)( i, j );
 #endif
               }
@@ -540,7 +539,7 @@ namespace cm
       flush( _bin_flush_threshold );
     }
 
-#ifdef TEST_CONSISTENCY
+#ifdef ENABLE_CONSISTENCY_CHECK
 
     inline void
     sum_updates( T *updates, T *summed_updates )
@@ -554,8 +553,12 @@ namespace cm
     consistency_check( T *updates )
     {
       long ncheck = 0;
+      int mpi_init;
       const T rtol = 1e-8;
       T * summed_updates;
+      // make sure MPI is already initialized
+      assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
+      assert( mpi_init );
       // sum the recorded updates across threads
       summed_updates = new T [_m * _n];
       sum_updates( updates, summed_updates );
@@ -592,7 +595,7 @@ namespace cm
                 << std::endl;
     }
 
-#endif // TEST_CONSISTENCY
+#endif // ENABLE_CONSISTENCY_CHECK
 
     // drain the bins, stop accepting updates
     inline void
@@ -611,12 +614,12 @@ namespace cm
       // done, sync on return
       upcxx::barrier();
       // if enabled, the consistency check should only occur after commit
-#ifdef TEST_CONSISTENCY
+#ifdef ENABLE_CONSISTENCY_CHECK
       consistency_check( _record->data() );
 #endif
     }
 
-#ifdef MPIIO_SUPPORT
+#ifdef ENABLE_MPIIO_SUPPORT
 
     // save the distributed matrix to disk via MPI-IO
     // TODO: very C99 ... fix that
@@ -709,7 +712,7 @@ namespace cm
       MPI_Type_free( &distmat );
     }
 
-#endif // MPIIO_SUPPORT
+#endif // ENABLE_MPIIO_SUPPORT
 
   }; // end of ConvergentMatrix
 
