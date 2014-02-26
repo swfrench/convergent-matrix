@@ -4,8 +4,8 @@
 #include <cassert>
 
 #if ( defined(USE_MPI_WTIME) || \
-      defined(TEST_CONSISTENCY) || \
-      defined(MPIIO_SUPPORT) )
+      defined(ENABLE_CONSISTENCY_CHECK) || \
+      defined(ENABLE_MPIIO_SUPPORT) )
 #include <mpi.h>
 #define MPI_INIT_REQUIRED
 #endif
@@ -98,6 +98,9 @@ main( int argc, char **argv )
   // init distributed matrix object (block-cyclic: see convergent_matrix.hpp)
   dist_mat = new cmat_t( M, M );
   dist_mat->progress_interval( 1 );
+#ifdef ENABLE_CONSISTENCY_CHECK
+  dist_mat->consistency_check_on();
+#endif
   printf( "%4i : initialized distributed matrix (progress interval: %i)\n",
           MYTHREAD, dist_mat->progress_interval() ); fflush( stdout );
 
@@ -126,7 +129,7 @@ main( int argc, char **argv )
   printf( "%4i : total time spent in update / commit %fs\n", MYTHREAD, wt_tot ); fflush( stdout );
 
   // test the write functionality
-#ifdef MPIIO_SUPPORT
+#ifdef ENABLE_MPIIO_SUPPORT
   dist_mat->save( "test.matrix" );
 #endif
 
