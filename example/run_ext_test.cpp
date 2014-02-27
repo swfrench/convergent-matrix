@@ -143,7 +143,8 @@ main( int argc, char **argv )
   delete dist_mat;
 
 #ifdef MPI_INIT_REQUIRED
-  MPI_Finalize();
+  if ( ! mpi_init )
+    MPI_Finalize();
 #endif
 
   // shut down upcxx
