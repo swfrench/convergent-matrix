@@ -13,6 +13,7 @@ CXXFLAGS += $(UPCXX_CXXFLAGS) -I$I -I.
 # dirs
 O = obj
 B = bin
+D = doc
 
 # build products
 OBJ = $O/run_ext_test.o
@@ -35,10 +36,14 @@ $O :
 $B :
 	mkdir -p $B
 
+.PHONY : $D
+$D :
+	doxygen doxygen.conf
+
 .PHONY : clean
 clean :
 	rm -rf $O
 
 .PHONY : distclean
 distclean :
-	rm -rf $O $B
+	rm -rf $O $B $D

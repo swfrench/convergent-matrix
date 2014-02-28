@@ -1,23 +1,25 @@
 /**
+ * \mainpage ConvergentMatrix
+ *
  * A "convergent" distributed dense matrix data structure
  *
  * Key components:
- *  - The ConvergentMatrix<T,NPROW,NPCOL,MB,NB,LLD> abstraction accumulates
- *    updates to the global distributed matrix in bins (Bin<T>) for later
+ *  - The \c ConvergentMatrix<T,NPROW,NPCOL,MB,NB,LLD> abstraction accumulates
+ *    updates to the global distributed matrix in bins (\c Bin<T>) for later
  *    asynchronous application.
- *  - The Bin<T> object implements the binning concept in ConvergentMatrix,
+ *  - The \c Bin<T> object implements the binning concept in \c ConvergentMatrix,
  *    and handles "flushing" its contents by triggering remote asynchronous
- *    updates (update_task<T>).
+ *    updates (\c update_task<T>).
  *
- * Updates are represented as LocalMatrix<T> objects (see local_matrix.hpp),
+ * Updates are represented as \c LocalMatrix<T> objects (see local_matrix.hpp),
  * along with indexing arrays which map into the global distributed index
  * space.
  *
  * Once a series of updates have been applied, the matrix can be "committed"
- * (see ConvergentMatrix::commit()) and all bins are flushed.
+ * (see \c ConvergentMatrix::commit()) and all bins are flushed.
  * Thereafter, each thread has its own PBLAS-compatible portion of the global
  * matrix, consistent with the block-cyclic distribution defined by the
- * template parameters of ConvergentMatrix and assuming a row-major order of
+ * template parameters of \c ConvergentMatrix and assuming a row-major order of
  * threads in the process grid.
  */
 

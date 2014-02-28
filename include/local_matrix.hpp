@@ -1,10 +1,3 @@
-/**
- * The LocalMatrix<T> object, which simply represents a local matrix and
- * supports a few common BLAS operations; these are how matrix updates are
- * represented locally, along with index arrays which map into the global
- * index space.
- */
-
 #pragma once
 
 // overloaded definitions of gemm() and gemv() for double and float
