@@ -16,8 +16,8 @@ B = bin
 D = doc
 
 # build products
-OBJ = $O/run_ext_test.o
-BIN = $B/run_ext_test.x
+OBJ = $O/simple.o
+BIN = $B/simple.x
 
 ####
 
@@ -28,7 +28,7 @@ $(BIN) : $O $B $(OBJ)
 		$(OBJ) $(UPCXX_LDLIBS) $(BLAS_LDLIBS) -o $@
 
 $O/%.o : example/%.cpp $I/*.hpp
-	$(CXX) $(CXXFLAGS) -c $< -o $@
+	$(CXX) $(CXXFLAGS) -DENABLE_CONSISTENCY_CHECK -c $< -o $@
 
 $O :
 	mkdir -p $O
