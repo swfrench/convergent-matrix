@@ -527,7 +527,7 @@ namespace cm
 
     /**
      * Turn on consistency check mode (requires compilation with
-     * ENABLE_CONSISTENCY_CHECK).
+     * \c ENABLE_CONSISTENCY_CHECK).
      * NOTE: MPI must be initialized in order for the consistency check to run
      * on calls to commit() (necessary for summation of the replicated update
      * records).
@@ -545,7 +545,7 @@ namespace cm
 
     /**
      * Turn off consistency check mode (requires compilation with
-     * ENABLE_CONSISTENCY_CHECK).
+     * \c ENABLE_CONSISTENCY_CHECK).
      */
     inline void
     consistency_check_off()
@@ -563,8 +563,8 @@ namespace cm
 
     /**
      * Save the distributed matrix to disk via MPI-IO (requres compilation with
-     * ENABLE_MPIIO_SUPPORT). No implicit commit() before matrix data is
-     * written - always call commit() first.
+     * \c ENABLE_MPIIO_SUPPORT). No implicit \b commit() before matrix data is
+     * written - always call \b commit() first.
      * \param fname File name for matrix
      */
     void
