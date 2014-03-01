@@ -14,17 +14,20 @@
 #define NB 64
 #define LLD 1024
 
-// convenient typedef for distributed matrix
-typedef cm::ConvergentMatrix<float, NPROW, NPCOL, MB, NB, LLD> cm_t;
+// convenient typedef for the distributed matrix class
+typedef cm::ConvergentMatrix<float, NPROW, NPCOL, MB, NB, LLD> cmat_t;
 
 /**
- * A simple example of some ConvergentMatrix functionality
+ * A small example of some basic ConvergentMatrix functionality
+ *
+ * Must be run on 4 threads using the appropriate command (mpirun, aprun, etc.)
+ * for the environment and GASNet conduit.
  */
 void
 simple()
 {
   // initialize the distributed matrix abstraction
-  cm_t dist_mat( M, N );
+  cmat_t dist_mat( M, N );
 
   // optional: turn on replicated consistency checks (run during commit)
   // * requires enough memory to replicate the entire matrix to all threads
