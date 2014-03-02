@@ -25,8 +25,8 @@ typedef double real_t;
 //#define M ( MSUB_REPS * MSUB_SIZE )
 //#define MSUB_MIN 1000
 //#define MSUB_MAX 1200
-//#define NPCOL 2
-//#define NPROW 2
+//#define NPCOL 8
+//#define NPROW 8
 //#define MB 64
 //#define NB 64
 //#define LLD 12544
