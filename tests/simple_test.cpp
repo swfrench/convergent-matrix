@@ -126,7 +126,7 @@ run()
   dist_mat.progress_interval( 1 );
 
   // turn on consistency checks (if available)
-#ifdef ENABLE_CONSISTENCY_CHECK
+#if defined(ENABLE_CONSISTENCY_CHECK) && ! defined(FORCE_NO_CONSISTENCY_CHECK )
   dist_mat.consistency_check_on();
 #endif
 

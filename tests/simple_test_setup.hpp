@@ -30,3 +30,4 @@ typedef double real_t;
 //#define MB 64
 //#define NB 64
 //#define LLD 12544
+//#define FORCE_NO_CONSISTENCY_CHECK
