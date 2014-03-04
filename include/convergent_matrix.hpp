@@ -140,20 +140,20 @@ namespace cm
 
 #ifdef ENABLE_MPI_HELPERS
 
-    inline int
-    get_mpi_base_type( float *x )
+    inline MPI_Datatype
+    get_mpi_base_type( float * )
     {
       return MPI_FLOAT;
     }
 
-    inline int
-    get_mpi_base_type( double *x )
+    inline MPI_Datatype
+    get_mpi_base_type( double * )
     {
       return MPI_DOUBLE;
     }
 
-    inline
-    int get_mpi_base_type()
+    inline MPI_Datatype
+    get_mpi_base_type()
     {
       return get_mpi_base_type( _local_ptr );
     }
@@ -165,7 +165,7 @@ namespace cm
     inline void
     sum_updates( T *updates, T *summed_updates )
     {
-      int base_dtype = get_mpi_base_type();
+      MPI_Datatype base_dtype = get_mpi_base_type();
       MPI_Allreduce( updates, summed_updates, _m * _n, base_dtype, MPI_SUM,
                      MPI_COMM_WORLD );
     }
@@ -591,8 +591,8 @@ namespace cm
       int gsizes[]   = { (int)_m, (int)_n },
           distribs[] = { MPI_DISTRIBUTE_CYCLIC, MPI_DISTRIBUTE_CYCLIC },
           dargs[]    = { MB, NB },
-          psizes[]   = { NPROW, NPCOL },
-          base_dtype = get_mpi_base_type();
+          psizes[]   = { NPROW, NPCOL };
+      MPI_Datatype base_dtype = get_mpi_base_type();
       MPI_Type_create_darray( NPCOL * NPROW, mpi_rank, 2,
                               gsizes, distribs, dargs, psizes,
                               MPI_ORDER_FORTRAN,
