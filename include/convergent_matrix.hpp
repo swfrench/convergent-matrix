@@ -563,8 +563,8 @@ namespace cm
 
     /**
      * Save the distributed matrix to disk via MPI-IO (requres compilation with
-     * \c ENABLE_MPIIO_SUPPORT). No implicit \b commit() before matrix data is
-     * written - always call \b commit() first.
+     * \c ENABLE_MPIIO_SUPPORT). No implicit \c commit() before matrix data is
+     * written - always call \c commit() first.
      * \param fname File name for matrix
      */
     void
@@ -604,10 +604,10 @@ namespace cm
       MPI_Type_size( distmat, &distmat_size );
       assert( distmat_size / sizeof(T) == ( _m_local * _n_local ) );
 
-      // open read-only
+      // open for writing
       MPI_File_open( MPI_COMM_WORLD, fname,
-                    MPI_MODE_CREATE | MPI_MODE_WRONLY,
-                    MPI_INFO_NULL, &f_ata );
+                     MPI_MODE_CREATE | MPI_MODE_WRONLY,
+                     MPI_INFO_NULL, &f_ata );
 
       // set view w/ distmat
       MPI_File_set_view( f_ata, 0, base_dtype, distmat, "native", MPI_INFO_NULL );
@@ -633,6 +633,82 @@ namespace cm
       // sanity check on data written
       MPI_Get_count( &status, base_dtype, &write_count );
       assert( write_count == ( _m_local * _n_local ) );
+
+      // expansion in place
+      if ( _m_local < LLD )
+        for ( long j = _n_local - 1; j > 0; j-- )
+          for ( long i = _m_local - 1; i >= 0; i-- )
+            _local_ptr[i + j * LLD] = _local_ptr[i + j * _m_local];
+
+      // free distributed type
+      MPI_Type_free( &distmat );
+    }
+
+    /**
+     * Load a distributed matrix from disk via MPI-IO (requres compilation with
+     * \c ENABLE_MPIIO_SUPPORT).
+     * \param fname File name for matrix
+     */
+    void
+    load( const char *fname )
+    {
+      int mpi_init, mpi_rank, distmat_size, read_count;
+      double wt_io, wt_io_max;
+      MPI_Status status;
+      MPI_Datatype distmat;
+      MPI_File f_ata;
+
+      // make sure we all get here
+      upcxx::barrier();
+
+      // make sure MPI is already initialized
+      assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
+      assert( mpi_init );
+
+      // check process grid ordering
+      MPI_Comm_rank( MPI_COMM_WORLD, &mpi_rank );
+      assert( _myrow * NPCOL + _mycol == mpi_rank );
+
+      // initialize distributed type
+      int gsizes[]   = { (int)_m, (int)_n },
+          distribs[] = { MPI_DISTRIBUTE_CYCLIC, MPI_DISTRIBUTE_CYCLIC },
+          dargs[]    = { MB, NB },
+          psizes[]   = { NPROW, NPCOL };
+      MPI_Datatype base_dtype = get_mpi_base_type();
+      MPI_Type_create_darray( NPCOL * NPROW, mpi_rank, 2,
+                              gsizes, distribs, dargs, psizes,
+                              MPI_ORDER_FORTRAN,
+                              base_dtype,
+                              &distmat );
+      MPI_Type_commit( &distmat );
+
+      // sanity check on check on distributed array data size
+      MPI_Type_size( distmat, &distmat_size );
+      assert( distmat_size / sizeof(T) == ( _m_local * _n_local ) );
+
+      // open read-only
+      MPI_File_open( MPI_COMM_WORLD, fname,
+                     MPI_MODE_RDONLY,
+                     MPI_INFO_NULL, &f_ata );
+
+      // set view w/ distmat
+      MPI_File_set_view( f_ata, 0, base_dtype, distmat, "native", MPI_INFO_NULL );
+
+      // read in local data
+      wt_io = - MPI_Wtime();
+      MPI_File_read_all( f_ata, _local_ptr, _m_local * _n_local, base_dtype, &status );
+      wt_io = wt_io + MPI_Wtime();
+
+      // close; report io time
+      MPI_File_close( &f_ata );
+      MPI_Reduce( &wt_io, &wt_io_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD );
+      if ( mpi_rank == 0 )
+        printf( "[%s] max time spent in matrix read: %.3f s\n", __func__,
+                wt_io_max );
+
+      // sanity check on data read
+      MPI_Get_count( &status, base_dtype, &read_count );
+      assert( read_count == ( _m_local * _n_local ) );
 
       // expansion in place
       if ( _m_local < LLD )
