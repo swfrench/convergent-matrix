@@ -113,6 +113,9 @@ run()
   long **ixs;    // update indexing
   real_t *data;  // update data (reused for each round, though indexing varies)
 
+  // timing info for various stages
+  double wt_commit = 0.0, wt_update = 0.0, wt_fill = 0.0;
+
   // initialize the distributed matrix
   cmat_t dist_mat( M, M );
 
@@ -126,17 +129,16 @@ run()
   dist_mat.progress_interval( 1 );
 
   // turn on consistency checks (if available)
-#if defined(ENABLE_CONSISTENCY_CHECK) && ! defined(FORCE_NO_CONSISTENCY_CHECK )
+#if defined(ENABLE_CONSISTENCY_CHECK) && ! defined(FORCE_NO_CONSISTENCY_CHECK)
   dist_mat.consistency_check_on();
 #endif
 
   printf( "Thread %4i | starting update rounds ...\n", MYTHREAD );
 
-  double wt_commit = 0.0, wt_update = 0.0;
-
-  // perform a number of dummy updates
+  // perform a number of dummy updates: symmetric case
   for ( int r = 0; r < niter; r++ ) {
     cm::LocalMatrix<real_t> GtG( nxs[r], nxs[r], data );
+    // track update / binning time
     wt_update -= WTIME();
     dist_mat.update( &GtG, ixs[r] );
     wt_update += WTIME();
@@ -150,12 +152,25 @@ run()
   dist_mat.commit();
   wt_commit += WTIME();
 
+  // commit all updates to the ConvergentMatrix abstraction
+  printf( "Thread %4i | filling strictly lower triangular part ...\n",
+          MYTHREAD );
+
+  // track fill_lower / commit time
+  wt_fill -= WTIME();
+  dist_mat.fill_lower();
+  dist_mat.commit();
+  wt_fill += WTIME();
+
+  // report timing
   printf( "Thread %4i | time spent in update: %fs\n",
           MYTHREAD, wt_update );
   printf( "Thread %4i | time spent in commit: %fs\n",
           MYTHREAD, wt_commit );
-  printf( "Thread %4i | total time: %fs\n",
+  printf( "Thread %4i | total time in initial update / commit phase: %fs\n",
           MYTHREAD, wt_update + wt_commit );
+  printf( "Thread %4i | total time in fill / commit phase: %fs\n",
+          MYTHREAD, wt_fill );
 
   // test the write functionality (if available)
 #ifdef ENABLE_MPIIO_SUPPORT
@@ -164,8 +179,12 @@ run()
 
   // fetch the local PBLAS-compatible block-cyclic storage array
   real_t * local_data = dist_mat.get_local_data();
+
+  // display local leading entry
   printf( "Thread %4i | local_data[0] = %f\n",
           MYTHREAD, local_data[0] );
+
+  // try remote random access read
   printf( "Thread %4i | dist_mat( 64, 64 ) = %f\n",
           MYTHREAD, dist_mat( 64, 64 ) );
 

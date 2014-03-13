@@ -456,6 +456,29 @@ namespace cm
     }
 
     /**
+     * Distributed matrix update: general _elemental_ case
+     * \param elem The elemental update
+     * \param ix Global index in distributed matrix (leading dimension)
+     * \param jx Global index in distributed matrix (trailing dimension)
+     */
+    inline void
+    update( T elem, long ix, long jx )
+    {
+      // bin the update
+      int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
+      long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
+                        ( ix / ( MB * NPROW ) ) * MB + ix % MB;
+      _bins[tid]->append( elem, ij );
+#ifdef ENABLE_CONSISTENCY_CHECK
+      if ( _consistency_mode )
+        (*_update_record)( ix, jx ) += elem;
+#endif
+
+      // possibly flush bins
+      flush( _bin_flush_threshold );
+    }
+
+    /**
      * Distributed matrix update: symmetric case
      * \param Mat The update (strided) slice
      * \param ix Maps slice into distributed matrix (both dimensions)
@@ -485,6 +508,41 @@ namespace cm
             if ( ix[i] <= ix[j] )
               (*_update_record)( ix[i], ix[j] ) += (*Mat)( i, j );
 #endif
+
+      // possibly flush bins
+      flush( _bin_flush_threshold );
+    }
+
+    /**
+     * Fill in the lower triangular part of a symmetric distributed matrix in
+     * a single sweep.
+     * This routine uses the same logic as the general update case and only
+     * ensures that the requisite updates have been initiated on the source
+     * side.
+     * There is also no implicit \c commit() before the fill updates start.
+     * Thus, always call \c commit() _before_ calling \c fill_lower(), and
+     * again when you need to ensure the full updates have been applied.
+     */
+    void
+    fill_lower()
+    {
+      for ( long j = 0; j < _n_local; j++ ) {
+        long ix = ( j / NB ) * ( NPCOL * NB ) + _mycol * NB + j % NB;
+        for ( long i = 0; i < _m_local; i++ ) {
+          long jx = ( i / MB ) * ( NPROW * MB ) + _myrow * MB + i % MB;
+          // use _transposed_ global indices to fill in the strict lower part
+          if ( ix > jx ) {
+            int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
+            long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
+                              ( ix / ( MB * NPROW ) ) * MB + ix % MB;
+            _bins[tid]->append( _local_ptr[i + j * LLD], ij );
+#ifdef ENABLE_CONSISTENCY_CHECK
+            if ( _consistency_mode )
+              (*_update_record)( ix, jx ) += _local_ptr[i + j * LLD];
+#endif
+          }
+        }
+      }
 
       // possibly flush bins
       flush( _bin_flush_threshold );
