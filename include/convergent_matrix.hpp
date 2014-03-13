@@ -540,6 +540,8 @@ namespace cm
             if ( _consistency_mode )
               (*_update_record)( ix, jx ) += _local_ptr[i + j * LLD];
 #endif
+          } else {
+            break; // nothing left to do in this column ...
           }
         }
       }
