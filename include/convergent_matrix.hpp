@@ -33,16 +33,18 @@
 #include <vector>
 #include <cstdio>
 #include <cassert>
+
+#include <upcxx.h>
+
 #ifdef ENABLE_CONSISTENCY_CHECK
 #include <cmath>
 #endif
+
 #ifdef ENABLE_PROGRESS_THREAD
 #include <pthread.h>
 #include <unistd.h>  // usleep
 #define PROGRESS_HELPER_PAUSE_USEC 50000
 #endif
-
-#include <upcxx.h>
 
 #if ( defined(ENABLE_CONSISTENCY_CHECK) || \
       defined(ENABLE_MPIIO_SUPPORT) )
@@ -50,11 +52,9 @@
 #define ENABLE_MPI_HELPERS
 #endif
 
-// LocalMatrix<T>
-#include "local_matrix.hpp"
-
-// Bin<T>
-#include "bin.hpp"
+// cm additions / internals
+#include "local_matrix.hpp"  // LocalMatrix<T>
+#include "bin.hpp"           // Bin<T>
 
 // default bin-size threshold (number of elems) before it is flushed
 #ifndef DEFAULT_BIN_FLUSH_THRESHOLD
@@ -65,6 +65,7 @@
 #ifndef DEFAULT_PROGRESS_INTERVAL
 #define DEFAULT_PROGRESS_INTERVAL 1
 #endif
+
 
 /**
  * Contains classes associated with the convergent-matrix abstraction
