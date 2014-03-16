@@ -31,6 +31,11 @@
 #ifdef ENABLE_CONSISTENCY_CHECK
 #include <cmath>
 #endif
+#ifdef ENABLE_PROGRESS_THREAD
+#include <pthread.h>
+#include <unistd.h>  // usleep
+#define PROGRESS_HELPER_PAUSE_USEC 50000
+#endif
 
 #include <upcxx.h>
 
@@ -61,6 +66,40 @@
  */
 namespace cm
 {
+
+#ifdef ENABLE_PROGRESS_THREAD
+
+  /**
+   * Argument struct for the \c progress_helper() thread
+   */
+  struct progress_helper_args
+  {
+    pthread_mutex_t * tq_mutex;
+    bool *progress_thread_stop;
+  };
+
+  /**
+   * The action performed by the \c progress_helper() thread
+   */
+  void *
+  progress_helper( void *args_ptr ) {
+    // re-cast args ptr
+    progress_helper_args *args = (progress_helper_args *)args_ptr;
+    // spin in upcxx::drain()
+    while ( 1 ) {
+      pthread_mutex_lock( args->tq_mutex );
+      if ( *args->progress_thread_stop ) {
+        pthread_mutex_unlock( args->tq_mutex );
+        return NULL;
+      }
+      upcxx::drain();
+      pthread_mutex_unlock( args->tq_mutex );
+      // pause briefly
+      usleep( PROGRESS_HELPER_PAUSE_USEC );
+    }
+  }
+
+#endif // ENABLE_PROGRESS_THREAD
 
   /**
    * Convergent matrix abstraction
@@ -95,6 +134,11 @@ namespace cm
     bool _consistency_mode;
     LocalMatrix<T> * _update_record;
 #endif
+#ifdef ENABLE_PROGRESS_THREAD
+    bool _progress_thread_stop, _progress_thread_running;
+    pthread_t _progress_thread;
+    pthread_mutex_t _tq_mutex;
+#endif
 
     // flush bins that are "full" (exceed the current threshold)
     inline void
@@ -105,16 +149,22 @@ namespace cm
         if ( _bins[tid]->size() > thresh )
           _bins[tid]->flush( &_e );
 
-      // increment update counter
-      _flush_counter += 1;
+#ifdef ENABLE_PROGRESS_THREAD
+      if ( ! _progress_thread_running ) { 
+#endif
+        // increment update counter
+        _flush_counter += 1;
 
-      // check whether we should pause to flush the task queue
-      if ( thresh == 0 || _flush_counter == _progress_interval ) {
-        // drain the task queue
-        upcxx::drain();
-        // reset the counter
-        _flush_counter = 0;
+        // check whether we should pause to flush the task queue
+        if ( thresh == 0 || _flush_counter == _progress_interval ) {
+          // drain the task queue
+          upcxx::drain();
+          // reset the counter
+          _flush_counter = 0;
+        }
+#ifdef ENABLE_PROGRESS_THREAD
       }
+#endif
     }
 
     // determine lower bound on local storage for a given block-cyclic
@@ -137,6 +187,52 @@ namespace cm
         m_local += m % mb; // process ip _may_ receive a partial block
       return m_local;
     }
+
+#ifdef ENABLE_PROGRESS_THREAD
+
+    // begin progress thread execution (executes progress_helper())
+    void
+    progress_thread_start()
+    {
+      pthread_attr_t th_attr;
+      progress_helper_args * args;
+
+      // erroneous to call while thread is running
+      assert( ! _progress_thread_running );
+
+      // set up progress helper argument struct
+      args = new progress_helper_args;
+      args->tq_mutex = &_tq_mutex;
+      args->progress_thread_stop = &_progress_thread_stop;
+
+      // set thread as joinable
+      pthread_attr_init( &th_attr );
+      pthread_attr_setdetachstate( &th_attr, PTHREAD_CREATE_JOINABLE );
+
+      // turn off stop flag
+      _progress_thread_stop = false;
+
+      // start the thread
+      assert( pthread_create( &_progress_thread, &th_attr, progress_helper,
+                              (void *)args ) == 0 );
+      _progress_thread_running = true;
+    }
+
+    // signal to stop the progress thread and wait on it
+    void
+    progress_thread_stop()
+    {
+      // set the stop flag
+      pthread_mutex_lock( &_tq_mutex );
+      _progress_thread_stop = true;
+      pthread_mutex_unlock( &_tq_mutex );
+
+      // wait for thread to stop
+      assert( pthread_join( _progress_thread, NULL ) == 0 );
+      _progress_thread_running = false;
+    }
+
+#endif // ENABLE_PROGRESS_THREAD
 
 #ifdef ENABLE_MPI_HELPERS
 
@@ -261,7 +357,11 @@ namespace cm
 
       // set up bins
       for ( int tid = 0; tid < THREADS; tid++ )
+#ifdef ENABLE_PROGRESS_THREAD
+        _bins.push_back( new Bin<T>( _g_ptrs[tid], &_tq_mutex ) );
+#else
         _bins.push_back( new Bin<T>( _g_ptrs[tid] ) );
+#endif
 
       // init the progress() interval to its default value
       _progress_interval = DEFAULT_PROGRESS_INTERVAL;
@@ -274,23 +374,70 @@ namespace cm
       _consistency_mode = false;
       _update_record = NULL;
 #endif
+
+      // initialize the task-queue mutex and progress thread state flag
+#ifdef ENABLE_PROGRESS_THREAD
+      _progress_thread_running = false;
+      pthread_mutex_init( &_tq_mutex, NULL );
+#endif
     }
 
     ~ConvergentMatrix()
     {
+#ifdef ENABLE_PROGRESS_THREAD
+      // stop the progress thread
+      if ( _progress_thread_running )
+        progress_thread_stop();
+#endif
+      // clean up the bins
       for ( int tid = 0; tid < THREADS; tid++ )
         delete _bins[tid];
+      // finally, delete the gasnet-addressable local storage
       upcxx::deallocate<T>( _g_local_ptr );
+    }
+
+    /**
+     * Starts a progress thread for draining the task queue in the background.
+     * \b Importantly, the progress thread will only execute until the next
+     * call to \c commit().
+     * Thus \c use_progress_thread() must be called for each commit phase
+     * separately if it is desired.
+     * Further, the use of \c upcxx functions that touch the task queue during
+     * progress thread executed is not advised and the resulting behavior is
+     * \b undefined.
+     */
+    inline void
+    use_progress_thread()
+    {
+      if ( ! _progress_thread_running )
+        progress_thread_start();
     }
 
     /**
      * Get a raw pointer to the local distributed matrix storage (can be passed
      * to, for example, PBLAS routines).
+     * The underlying storage _will_ be freed in the ConvergentMatrix
+     * destructor - for a persistent copy, see \c get_local_data_copy().
      */
     inline T *
-    get_local_data()
+    get_local_data() const
     {
       return _local_ptr;
+    }
+
+    /**
+     * Get a point to a _copy_ of the local distributed matrix storage (can be
+     * passed to, for example, PBLAS routines).
+     * The underlying storage will _not_ be freed in the ConvergentMatrix
+     * destructor, in contrast to that from \c get_local_data().
+     */
+    inline T *
+    get_local_data_copy() const
+    {
+      T * copy_ptr = new T[LLD * _n_local];
+      for ( long ij = 0; ij < LLD * _n_local; ij++ )
+        copy_ptr[ij] = _local_ptr[ij];
+      return copy_ptr;
     }
 
     /**
@@ -301,6 +448,11 @@ namespace cm
     inline void
     reset()
     {
+#ifdef ENABLE_PROGRESS_THREAD
+      // stop the progress thread
+      if ( _progress_thread_running )
+        progress_thread_stop();
+#endif
       // zero local storage
       for ( long ij = 0; ij < LLD * _n_local; ij++ )
         _local_ptr[ij] = (T) 0;
@@ -335,8 +487,10 @@ namespace cm
     }
 
     /**
-     * Get the progress interval (number of calls to update() before draining
-     * the local task queue)
+     * Get the progress interval, the number of bulk-update bin-flushes before
+     * draining the local task queue.
+     * Note that if there is a progress thread running, this drain operation is
+     * not performed.
      */
     inline int
     progress_interval() const
@@ -345,8 +499,10 @@ namespace cm
     }
 
     /**
-     * Set the progress interval (number of calls to update() before draining
-     * the local task queue)
+     * Set the progress interval, the number of bulk-update bin-flushes before
+     * draining the local task queue.
+     * Note that if there is a progress thread running, this drain operation is
+     * not performed.
      * \param interval The progress interval
      */
     inline void
@@ -558,6 +714,12 @@ namespace cm
     inline void
     commit()
     {
+      // stop the progress thread, if it has started
+#ifdef ENABLE_PROGRESS_THREAD
+      if ( _progress_thread_running )
+        progress_thread_stop();
+#endif
+
       // synchronize
       upcxx::barrier();
 

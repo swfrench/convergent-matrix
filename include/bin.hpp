@@ -2,6 +2,9 @@
 
 #include <cassert>
 #include <vector>
+#ifdef ENABLE_PROGRESS_THREAD
+#include <pthread.h>
+#endif
 #include <upcxx.h>
 
 namespace cm
@@ -62,6 +65,9 @@ namespace cm
     upcxx::global_ptr<T> _g_remote_data;  // global_ptr _local_ to target
     std::vector<long> _ix;                // linear indexing for target
     std::vector<T> _data;                 // update data for target
+#ifdef ENABLE_PROGRESS_THREAD
+    pthread_mutex_t *_tq_mutex;
+#endif
 
     inline void
     clear()
@@ -76,9 +82,15 @@ namespace cm
      * Initialize the Bin object for a given target
      * \param g_remote_data global_ptr<T> reference to the target-local storage
      */
+#ifdef ENABLE_PROGRESS_THREAD
+    Bin( upcxx::global_ptr<T> g_remote_data, pthread_mutex_t * tq_mutex ) :
+      _remote_tid(g_remote_data.tid()), _g_remote_data(g_remote_data), _tq_mutex(tq_mutex)
+    {}
+#else
     Bin( upcxx::global_ptr<T> g_remote_data ) :
       _remote_tid(g_remote_data.tid()), _g_remote_data(g_remote_data)
     {}
+#endif
 
     /**
      * Current size of the bin (number of update elems not yet applied)
@@ -113,6 +125,10 @@ namespace cm
       upcxx::global_ptr<long> g_ix;
       upcxx::global_ptr<T> g_data;
 
+#ifdef ENABLE_PROGRESS_THREAD
+      pthread_mutex_lock( _tq_mutex );
+#endif
+
       // allocate remote storage
       g_ix = upcxx::allocate<long>( _remote_tid, _ix.size() );
       g_data = upcxx::allocate<T>( _remote_tid, _data.size() );
@@ -126,6 +142,10 @@ namespace cm
                                       _data.size(),
                                       _g_remote_data,
                                       g_ix, g_data );
+
+#ifdef ENABLE_PROGRESS_THREAD
+      pthread_mutex_unlock( _tq_mutex );
+#endif
 
       // clear internal (vector) storage
       clear();
