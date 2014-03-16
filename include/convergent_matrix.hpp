@@ -90,7 +90,8 @@ namespace cm
    * \param args_ptr A \c void type pointer to a progress_helper_args structure
    */
   void *
-  progress_helper( void *args_ptr ) {
+  progress_helper( void *args_ptr )
+  {
     // re-cast args ptr
     progress_helper_args *args = (progress_helper_args *)args_ptr;
     // spin in upcxx::drain()
