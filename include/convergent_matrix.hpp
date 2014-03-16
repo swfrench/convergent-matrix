@@ -21,6 +21,11 @@
  * matrix, consistent with the block-cyclic distribution defined by the
  * template parameters of \c ConvergentMatrix and assuming a row-major order of
  * threads in the process grid.
+ *
+ * \b Note: by default, no documentation is produced for internal data
+ * structures and functions (e.g. \c update_task<T> and \c Bin<T>). To enable
+ * internal documentation, add \c INTERNAL_DOCS to the ENABLED_SECTIONS option
+ * in \c doxygen.conf.
  */
 
 #pragma once
@@ -69,6 +74,8 @@ namespace cm
 
 #ifdef ENABLE_PROGRESS_THREAD
 
+  /// @cond INTERNAL_DOCS
+
   /**
    * Argument struct for the \c progress_helper() thread
    */
@@ -80,6 +87,7 @@ namespace cm
 
   /**
    * The action performed by the \c progress_helper() thread
+   * \param args_ptr A \c void type pointer to a progress_helper_args structure
    */
   void *
   progress_helper( void *args_ptr ) {
@@ -98,6 +106,8 @@ namespace cm
       usleep( PROGRESS_HELPER_PAUSE_USEC );
     }
   }
+
+  /// @endcond
 
 #endif // ENABLE_PROGRESS_THREAD
 
@@ -396,15 +406,20 @@ namespace cm
       upcxx::deallocate<T>( _g_local_ptr );
     }
 
+#ifdef ENABLE_PROGRESS_THREAD
+
     /**
      * Starts a progress thread for draining the task queue in the background.
+     *
      * \b Importantly, the progress thread will only execute until the next
      * call to \c commit().
-     * Thus \c use_progress_thread() must be called for each commit phase
+     * Thus, \c use_progress_thread() must be called for each commit epoch
      * separately if it is desired.
      * Further, the use of \c upcxx functions that touch the task queue during
      * progress thread executed is not advised and the resulting behavior is
      * \b undefined.
+     *
+     * \b Note: Requires compilation with \c ENABLE_PROGRESS_THREAD.
      */
     inline void
     use_progress_thread()
@@ -412,6 +427,8 @@ namespace cm
       if ( ! _progress_thread_running )
         progress_thread_start();
     }
+
+#endif // ENABLE_PROGRESS_THREAD
 
     /**
      * Get a raw pointer to the local distributed matrix storage (can be passed
@@ -710,6 +727,9 @@ namespace cm
      * Drain all update bins and wait on associated async tasks (implicit
      * barrier). If the consistency check is turned on, it will run after all
      * updates have been applied.
+     *
+     * \b Note: will stop the progress thread if it is running (see \c
+     * use_progress_thread()).
      */
     inline void
     commit()

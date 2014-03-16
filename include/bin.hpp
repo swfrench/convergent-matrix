@@ -10,6 +10,8 @@
 namespace cm
 {
 
+  /// @cond INTERNAL_DOCS
+
   /**
    * A task that performs remote updates (spawned by Bin<T>)
    * \param g_my_data Reference to local storage on the target
@@ -66,7 +68,7 @@ namespace cm
     std::vector<long> _ix;                // linear indexing for target
     std::vector<T> _data;                 // update data for target
 #ifdef ENABLE_PROGRESS_THREAD
-    pthread_mutex_t *_tq_mutex;
+    pthread_mutex_t *_tq_mutex;           // mutex protecting task-queue ops
 #endif
 
     inline void
@@ -78,15 +80,21 @@ namespace cm
 
    public:
 
+#ifdef ENABLE_PROGRESS_THREAD
     /**
      * Initialize the Bin object for a given target
      * \param g_remote_data global_ptr<T> reference to the target-local storage
+     * \param tq_mutex pthread mutex protecting the task queue and associated
+     * GASNet operations
      */
-#ifdef ENABLE_PROGRESS_THREAD
     Bin( upcxx::global_ptr<T> g_remote_data, pthread_mutex_t * tq_mutex ) :
       _remote_tid(g_remote_data.tid()), _g_remote_data(g_remote_data), _tq_mutex(tq_mutex)
     {}
 #else
+    /**
+     * Initialize the Bin object for a given target
+     * \param g_remote_data global_ptr<T> reference to the target-local storage
+     */
     Bin( upcxx::global_ptr<T> g_remote_data ) :
       _remote_tid(g_remote_data.tid()), _g_remote_data(g_remote_data)
     {}
@@ -152,5 +160,7 @@ namespace cm
     }
 
   }; // end of Bin
+
+  /// @endcond
 
 }
