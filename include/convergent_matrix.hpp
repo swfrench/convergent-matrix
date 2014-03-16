@@ -43,7 +43,7 @@
 #ifdef ENABLE_PROGRESS_THREAD
 #include <pthread.h>
 #include <unistd.h>  // usleep
-#define PROGRESS_HELPER_PAUSE_USEC 50000
+#define PROGRESS_HELPER_PAUSE_USEC 1000
 #endif
 
 #if ( defined(ENABLE_CONSISTENCY_CHECK) || \
