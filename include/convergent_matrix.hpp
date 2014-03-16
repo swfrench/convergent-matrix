@@ -24,7 +24,7 @@
  *
  * \b Note: by default, no documentation is produced for internal data
  * structures and functions (e.g. \c update_task<T> and \c Bin<T>). To enable
- * internal documentation, add \c INTERNAL_DOCS to the ENABLED_SECTIONS option
+ * internal documentation, add \c INTERNAL_DOCS to the \c ENABLED_SECTIONS option
  * in \c doxygen.conf.
  */
 
