@@ -82,7 +82,10 @@ namespace cm
    */
   struct progress_helper_args
   {
+    // lock for operations on the task queue
     pthread_mutex_t * tq_mutex;
+
+    // boolean to signal the progres thread to exit
     bool *progress_thread_stop;
   };
 
@@ -95,15 +98,22 @@ namespace cm
   {
     // re-cast args ptr
     progress_helper_args *args = (progress_helper_args *)args_ptr;
+
     // spin in upcxx::drain()
     while ( 1 ) {
       pthread_mutex_lock( args->tq_mutex );
+
+      // check the stop flag, possibly exiting
       if ( *args->progress_thread_stop ) {
         pthread_mutex_unlock( args->tq_mutex );
         return NULL;
       }
+
+      // drain the task queue
       upcxx::drain();
+
       pthread_mutex_unlock( args->tq_mutex );
+
       // pause briefly
       usleep( PROGRESS_HELPER_PAUSE_USEC );
     }
@@ -131,21 +141,30 @@ namespace cm
 
    private:
 
-    long _m, _n;
-    long _myrow, _mycol;
-    long _m_local, _n_local;
+    // matrix dimension and process grid
+    long _m, _n;              // matrix global dimensions
+    long _m_local, _n_local;  // local-storage minimum dimensions
+    long _myrow, _mycol;      // coordinate in the process grid
+
+    // update binning and application
     int _flush_counter;
     int _progress_interval;
     int _bin_flush_threshold;
-    std::vector<Bin<T> *> _bins;
+    std::vector<Bin<T> *> _update_bins;
+    upcxx::event _e_update;
+
+    // distributed storage arrays (local and remote)
     T *_local_ptr;
     upcxx::global_ptr<T> _g_local_ptr;
-    upcxx::event _e;
-    upcxx::shared_array<upcxx::global_ptr<T> > _g_ptrs;
+    upcxx::shared_array<upcxx::global_ptr<T> > _g_remote_ptrs;
+
+    // replicated consistency checks
 #ifdef ENABLE_CONSISTENCY_CHECK
     bool _consistency_mode;
     LocalMatrix<T> * _update_record;
 #endif
+
+    // background progress threads
 #ifdef ENABLE_PROGRESS_THREAD
     bool _progress_thread_stop, _progress_thread_running;
     pthread_t _progress_thread;
@@ -158,11 +177,11 @@ namespace cm
     {
       // flush the bins
       for ( int tid = 0; tid < THREADS; tid++ )
-        if ( _bins[tid]->size() > thresh )
-          _bins[tid]->flush( &_e );
+        if ( _update_bins[tid]->size() > thresh )
+          _update_bins[tid]->flush( &_e_update );
 
 #ifdef ENABLE_PROGRESS_THREAD
-      if ( ! _progress_thread_running ) { 
+      if ( ! _progress_thread_running ) {
 #endif
         // increment update counter
         _flush_counter += 1;
@@ -266,7 +285,7 @@ namespace cm
       return get_mpi_base_type( _local_ptr );
     }
 
-#endif
+#endif // ENABLE_MPI_HELPERS
 
 #ifdef ENABLE_CONSISTENCY_CHECK
 
@@ -354,14 +373,14 @@ namespace cm
       assert( _m_local <= LLD );
 
       // (2) initialize shared_array of global pointers
-      _g_ptrs.init( THREADS );
+      _g_remote_ptrs.init( THREADS );
 
-      // (3) allocate and zero storage; write to _g_ptrs
+      // (3) allocate and zero storage; write to _g_remote_ptrs
       _g_local_ptr = upcxx::allocate<T>( MYTHREAD, LLD * _n_local );
       _local_ptr = (T *) _g_local_ptr;
       for ( long ij = 0; ij < LLD * _n_local; ij++ )
         _local_ptr[ij] = (T) 0;
-      _g_ptrs[MYTHREAD] = _g_local_ptr;
+      _g_remote_ptrs[MYTHREAD] = _g_local_ptr;
       upcxx::barrier();
 
       // set flush threashold for bins
@@ -370,9 +389,9 @@ namespace cm
       // set up bins
       for ( int tid = 0; tid < THREADS; tid++ )
 #ifdef ENABLE_PROGRESS_THREAD
-        _bins.push_back( new Bin<T>( _g_ptrs[tid], &_tq_mutex ) );
+        _update_bins.push_back( new Bin<T>( _g_remote_ptrs[tid], &_tq_mutex ) );
 #else
-        _bins.push_back( new Bin<T>( _g_ptrs[tid] ) );
+        _update_bins.push_back( new Bin<T>( _g_remote_ptrs[tid] ) );
 #endif
 
       // init the progress() interval to its default value
@@ -401,9 +420,11 @@ namespace cm
       if ( _progress_thread_running )
         progress_thread_stop();
 #endif
+
       // clean up the bins
       for ( int tid = 0; tid < THREADS; tid++ )
-        delete _bins[tid];
+        delete _update_bins[tid];
+
       // finally, delete the gasnet-addressable local storage
       upcxx::deallocate<T>( _g_local_ptr );
     }
@@ -418,7 +439,7 @@ namespace cm
      * Thus, \c use_progress_thread() must be called for each commit epoch
      * separately if it is desired.
      * Further, the use of \c upcxx functions that touch the task queue during
-     * progress thread executed is not advised and the resulting behavior is
+     * progress thread execution is not advised and the resulting behavior is
      * \b undefined.
      *
      * \b Note: Requires compilation with \c ENABLE_PROGRESS_THREAD.
@@ -472,14 +493,17 @@ namespace cm
       if ( _progress_thread_running )
         progress_thread_stop();
 #endif
+
       // zero local storage
       for ( long ij = 0; ij < LLD * _n_local; ij++ )
         _local_ptr[ij] = (T) 0;
+
 #ifdef ENABLE_CONSISTENCY_CHECK
       // reset consistency check ground truth as well
       if ( _consistency_mode )
         (*_update_record) = (T) 0;
 #endif
+
       // must be called by all threads
       upcxx::barrier();
     }
@@ -593,11 +617,12 @@ namespace cm
     inline T
     operator()( long ix, long jx )
     {
+      // infer thread id and linear index
       int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
       long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
                         ( ix / ( MB * NPROW ) ) * MB + ix % MB;
       // temporary hack: long index into global_ptr not currently supported
-      return _g_ptrs[tid].get() [(int)ij];
+      return _g_remote_ptrs[tid].get() [(int)ij];
     }
 
     /**
@@ -616,9 +641,10 @@ namespace cm
         for ( long i = 0; i < Mat->m(); i++ ) {
           int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
           long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
-          _bins[tid]->append( (*Mat)( i, j ), ij );
+          _update_bins[tid]->append( (*Mat)( i, j ), ij );
         }
       }
+
 #ifdef ENABLE_CONSISTENCY_CHECK
       if ( _consistency_mode )
         for ( long j = 0; j < Mat->n(); j++ )
@@ -643,7 +669,8 @@ namespace cm
       int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
       long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
                         ( ix / ( MB * NPROW ) ) * MB + ix % MB;
-      _bins[tid]->append( elem, ij );
+      _update_bins[tid]->append( elem, ij );
+
 #ifdef ENABLE_CONSISTENCY_CHECK
       if ( _consistency_mode )
         (*_update_record)( ix, jx ) += elem;
@@ -665,6 +692,7 @@ namespace cm
       // must be square to be symmetric
       assert( Mat->m() == Mat->n() );
 #endif
+
       // bin the local update
       for ( long j = 0; j < Mat->n(); j++ ) {
         int pcol = ( ix[j] / NB ) % NPCOL;
@@ -673,9 +701,10 @@ namespace cm
           if ( ix[i] <= ix[j] ) {
             int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
             long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
-            _bins[tid]->append( (*Mat)( i, j ), ij );
+            _update_bins[tid]->append( (*Mat)( i, j ), ij );
           }
       }
+
 #ifdef ENABLE_CONSISTENCY_CHECK
       if ( _consistency_mode )
         for ( long j = 0; j < Mat->n(); j++ )
@@ -710,11 +739,13 @@ namespace cm
             int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
             long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
                               ( ix / ( MB * NPROW ) ) * MB + ix % MB;
-            _bins[tid]->append( _local_ptr[i + j * LLD], ij );
+            _update_bins[tid]->append( _local_ptr[i + j * LLD], ij );
+
 #ifdef ENABLE_CONSISTENCY_CHECK
             if ( _consistency_mode )
               (*_update_record)( ix, jx ) += _local_ptr[i + j * LLD];
 #endif
+
           } else {
             break; // nothing left to do in this column ...
           }
@@ -755,7 +786,7 @@ namespace cm
       upcxx::drain();
 
       // wait on remote tasks
-      _e.wait();
+      _e_update.wait();
 
       // done, sync on return
       upcxx::barrier();
