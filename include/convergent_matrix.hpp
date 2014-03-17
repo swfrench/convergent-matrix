@@ -342,9 +342,9 @@ namespace cm
    public:
 
     /**
-     * The ConvergentMatrix distributed matrix abstraction.
-     * \param m Global leading dimension
-     * \param n Global trailing dimension
+     * Initialize the \c ConvergentMatrix distributed matrix abstraction.
+     * \param m Global leading dimension of the distributed matrix
+     * \param n Global trailing dimension of the distributed matrix
      */
     ConvergentMatrix( long m, long n ) :
       _m(m), _n(n)
@@ -413,13 +413,22 @@ namespace cm
 #endif
     }
 
+    /**
+     * Destructor for the \c ConvergentMatrix distributed matrix abstraction.
+     *
+     * On destruction, will:
+     * - Perform a final \c commit() (with consistency checks disabled),
+     *   clearing remaining asynchronous tasks from the queue
+     * - Free storage associated with update bins
+     * - Free storage associated with the distributed matrix
+     */
     ~ConvergentMatrix()
     {
-#ifdef ENABLE_PROGRESS_THREAD
-      // stop the progress thread
-      if ( _progress_thread_running )
-        progress_thread_stop();
+      // run commit() one last time _without_ consistency checks
+#ifdef ENABLE_CONSISTENCY_CHECK
+      consistency_check_off();
 #endif
+      commit();
 
       // clean up the bins
       for ( int tid = 0; tid < THREADS; tid++ )
@@ -429,34 +438,11 @@ namespace cm
       upcxx::deallocate<T>( _g_local_ptr );
     }
 
-#ifdef ENABLE_PROGRESS_THREAD
-
-    /**
-     * Starts a progress thread for draining the task queue in the background.
-     *
-     * \b Importantly, the progress thread will only execute until the next
-     * call to \c commit().
-     * Thus, \c use_progress_thread() must be called for each commit epoch
-     * separately if it is desired.
-     * Further, the use of \c upcxx functions that touch the task queue during
-     * progress thread execution is not advised and the resulting behavior is
-     * \b undefined.
-     *
-     * \b Note: Requires compilation with \c ENABLE_PROGRESS_THREAD.
-     */
-    inline void
-    use_progress_thread()
-    {
-      if ( ! _progress_thread_running )
-        progress_thread_start();
-    }
-
-#endif // ENABLE_PROGRESS_THREAD
-
     /**
      * Get a raw pointer to the local distributed matrix storage (can be passed
      * to, for example, PBLAS routines).
-     * The underlying storage _will_ be freed in the ConvergentMatrix
+     *
+     * \b Note: The underlying storage _will_ be freed in the \c ConvergentMatrix
      * destructor - for a persistent copy, see \c get_local_data_copy().
      */
     inline T *
@@ -468,8 +454,10 @@ namespace cm
     /**
      * Get a point to a _copy_ of the local distributed matrix storage (can be
      * passed to, for example, PBLAS routines).
-     * The underlying storage will _not_ be freed in the ConvergentMatrix
-     * destructor, in contrast to that from \c get_local_data().
+     *
+     * \b Note: The underlying storage will _not_ be freed in the
+     * \c ConvergentMatrix destructor, in contrast to that from
+     * \c get_local_data().
      */
     inline T *
     get_local_data_copy() const
@@ -481,30 +469,31 @@ namespace cm
     }
 
     /**
-     * Reset the distributed matrix (implicit barrier). Zeros the associated
-     * local storage (as well as the update record if consistency checks are
-     * turned on).
+     * Reset the distributed matrix (implicit barrier)
+     *
+     * Calls \c commit() (with consistency checks disabled), clearing remaining
+     * asynchronous tasks from the queue, and then zeros the associated local
+     * storage.
+     *
+     * \b Note: consistency checks must be manually re-enabled after calling
+     * \c reset() (see \c consistency_check_on()).
      */
     inline void
     reset()
     {
-#ifdef ENABLE_PROGRESS_THREAD
-      // stop the progress thread
-      if ( _progress_thread_running )
-        progress_thread_stop();
+      // disable consistency checks
+#ifdef ENABLE_CONSISTENCY_CHECK
+      consistency_check_off();
 #endif
+
+      // commit to complete any outstanding updates
+      commit();
 
       // zero local storage
       for ( long ij = 0; ij < LLD * _n_local; ij++ )
         _local_ptr[ij] = (T) 0;
 
-#ifdef ENABLE_CONSISTENCY_CHECK
-      // reset consistency check ground truth as well
-      if ( _consistency_mode )
-        (*_update_record) = (T) 0;
-#endif
-
-      // must be called by all threads
+      // synchronize
       upcxx::barrier();
     }
 
@@ -720,10 +709,13 @@ namespace cm
     /**
      * Fill in the lower triangular part of a symmetric distributed matrix in
      * a single sweep.
+     *
      * This routine uses the same logic as the general update case and only
      * ensures that the requisite updates have been initiated on the source
      * side.
-     * There is also no implicit \c commit() before the fill updates start.
+     *
+     * \b Note: There is also no implicit \c commit() before the fill updates
+     * start.
      * Thus, always call \c commit() _before_ calling \c fill_lower(), and
      * again when you need to ensure the full updates have been applied.
      */
@@ -798,14 +790,42 @@ namespace cm
 #endif
     }
 
+    // Optional functionality enabled at compile time ...
+
+#ifdef ENABLE_PROGRESS_THREAD
+
+    /**
+     * Starts a progress thread for draining the task queue in the background.
+     *
+     * \b Importantly, the progress thread will only execute until the next
+     * call to \c commit().
+     * Thus, \c use_progress_thread() must be called for each commit epoch
+     * separately if it is desired.
+     * Further, the use of \c upcxx functions that touch the task queue during
+     * progress thread execution is not advised and the resulting behavior is
+     * \b undefined.
+     *
+     * \b Note: Requires compilation with \c ENABLE_PROGRESS_THREAD.
+     */
+    inline void
+    use_progress_thread()
+    {
+      if ( ! _progress_thread_running )
+        progress_thread_start();
+    }
+
+#endif // ENABLE_PROGRESS_THREAD
+
 #ifdef ENABLE_CONSISTENCY_CHECK
 
     /**
-     * Turn on consistency check mode (requires compilation with
-     * \c ENABLE_CONSISTENCY_CHECK).
-     * NOTE: MPI must be initialized in order for the consistency check to run
-     * on calls to commit() (necessary for summation of the replicated update
-     * records).
+     * Turn on consistency check mode.
+     *
+     * \b Note: MPI must be initialized in order for the consistency check to
+     * run on calls to commit() (necessary for summation of the replicated
+     * update records).
+     *
+     * \b Note: Requires compilation with \c ENABLE_CONSISTENCY_CHECK.
      */
     inline void
     consistency_check_on()
@@ -814,13 +834,12 @@ namespace cm
       if ( _update_record == NULL )
         _update_record = new LocalMatrix<T>( _m, _n );
       (*_update_record) = (T) 0;
-      printf( "[%s] Thread %4i : Consistency check mode ON (recording ...)\n",
-              __func__, MYTHREAD );
     }
 
     /**
-     * Turn off consistency check mode (requires compilation with
-     * \c ENABLE_CONSISTENCY_CHECK).
+     * Turn off consistency check mode
+     *
+     * \b Note: Requires compilation with \c ENABLE_CONSISTENCY_CHECK.
      */
     inline void
     consistency_check_off()
@@ -828,8 +847,6 @@ namespace cm
       _consistency_mode = false;
       if ( _update_record != NULL )
         delete _update_record;
-      printf( "[%s] Thread %4i : Consistency check mode OFF\n",
-              __func__, MYTHREAD );
     }
 
 #endif // ENABLE_CONSISTENCY_CHECK
@@ -837,10 +854,13 @@ namespace cm
 #ifdef ENABLE_MPIIO_SUPPORT
 
     /**
-     * Save the distributed matrix to disk via MPI-IO (requres compilation with
-     * \c ENABLE_MPIIO_SUPPORT). No implicit \c commit() before matrix data is
-     * written - always call \c commit() first.
+     * Save the distributed matrix to disk via MPI-IO.
      * \param fname File name for matrix
+     *
+     * \b Note: No implicit \c commit() before matrix data is written - always
+     * call \c commit() first.
+     *
+     * \b Note: Requires compilation with \c ENABLE_MPIIO_SUPPORT.
      */
     void
     save( const char *fname )
@@ -920,9 +940,12 @@ namespace cm
     }
 
     /**
-     * Load a distributed matrix from disk via MPI-IO (requres compilation with
-     * \c ENABLE_MPIIO_SUPPORT).
+     * Load a distributed matrix to disk via MPI-IO.
      * \param fname File name for matrix
+     *
+     * \b Note: Replaces the current contents of the distributed storage array.
+     *
+     * \b Note: Requires compilation with \c ENABLE_MPIIO_SUPPORT.
      */
     void
     load( const char *fname )
