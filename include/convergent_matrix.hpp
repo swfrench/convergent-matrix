@@ -150,7 +150,7 @@ namespace cm
     int _flush_counter;
     int _progress_interval;
     int _bin_flush_threshold;
-    std::vector<Bin<T> *> _update_bins;
+    Bin<T> **_update_bins;
     upcxx::event _e_update;
 
     // distributed storage arrays (local and remote)
@@ -194,6 +194,19 @@ namespace cm
 
       // sync (ensuring the exchange is complete)
       upcxx::barrier();
+    }
+    
+    // initialize the update bins
+    inline void
+    init_bins()
+    {
+      _update_bins = new Bin<T> * [THREADS];
+      for ( int tid = 0; tid < THREADS; tid++ )
+#ifdef ENABLE_PROGRESS_THREAD
+        _update_bins[tid] = new Bin<T>( _g_remote_ptrs[tid], &_tq_mutex );
+#else
+        _update_bins[tid] = new Bin<T>( _g_remote_ptrs[tid] );
+#endif
     }
 
     // flush bins that are "full" (exceed the current threshold)
@@ -406,13 +419,8 @@ namespace cm
       // initialize distributed storage
       init_arrays();
 
-      // set up bins
-      for ( int tid = 0; tid < THREADS; tid++ )
-#ifdef ENABLE_PROGRESS_THREAD
-        _update_bins.push_back( new Bin<T>( _g_remote_ptrs[tid], &_tq_mutex ) );
-#else
-        _update_bins.push_back( new Bin<T>( _g_remote_ptrs[tid] ) );
-#endif
+      // initialize update bins
+      init_bins();
 
       // consistency check is off by default
 #ifdef ENABLE_CONSISTENCY_CHECK
@@ -447,6 +455,7 @@ namespace cm
       // clean up the bins
       for ( int tid = 0; tid < THREADS; tid++ )
         delete _update_bins[tid];
+      delete [] _update_bins;
 
       // finally, delete the gasnet-addressable local storage
       upcxx::deallocate<T>( _g_local_ptr );
