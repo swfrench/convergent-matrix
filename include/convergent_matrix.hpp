@@ -171,6 +171,31 @@ namespace cm
     pthread_mutex_t _tq_mutex;
 #endif
 
+    // *********************
+    // ** private methods **
+    // *********************
+
+    // initialize distributed storage arrays
+    inline void
+    init_arrays()
+    {
+      // initialize shared_array of global pointers
+      _g_remote_ptrs.init( THREADS );
+
+      // allocate GASNet addressable storage
+      _g_local_ptr = upcxx::allocate<T>( MYTHREAD, LLD * _n_local );
+
+      // cast to local ptr and zero
+      _local_ptr = (T *) _g_local_ptr;
+      std::fill( _local_ptr, _local_ptr + LLD * _n_local, 0 );
+
+      // exchange our global_ptr ref with the other upcxx threads
+      _g_remote_ptrs[MYTHREAD] = _g_local_ptr;
+
+      // sync (ensuring the exchange is complete)
+      upcxx::barrier();
+    }
+
     // flush bins that are "full" (exceed the current threshold)
     inline void
     flush( int thresh = 0 )
@@ -341,13 +366,20 @@ namespace cm
 
    public:
 
+    // ********************
+    // ** public methods **
+    // ********************
+
     /**
      * Initialize the \c ConvergentMatrix distributed matrix abstraction.
      * \param m Global leading dimension of the distributed matrix
      * \param n Global trailing dimension of the distributed matrix
      */
     ConvergentMatrix( long m, long n ) :
-      _m(m), _n(n)
+      _m(m), _n(n),
+      _bin_flush_threshold(DEFAULT_BIN_FLUSH_THRESHOLD),
+      _progress_interval(DEFAULT_PROGRESS_INTERVAL),
+      _flush_counter(0)
     {
       // checks on matrix dimension
       assert( _m > 0 );
@@ -359,6 +391,7 @@ namespace cm
       // setup block-cyclic distribution
       _myrow = MYTHREAD / NPROW;
       _mycol = MYTHREAD % NPCOL;
+
       // calculate minimum req'd local dimensions
       _m_local = roc( _m, NPROW, _myrow, MB );
       _n_local = roc( _n, NPCOL, _mycol, NB );
@@ -367,24 +400,11 @@ namespace cm
       assert( _m_local > 0 );
       assert( _n_local > 0 );
 
-      // allocate local storage, exchange global ptrs ...
-
-      // (1) check minimum local leading dimension
+      // check minimum local leading dimension compatible with LLD
       assert( _m_local <= LLD );
 
-      // (2) initialize shared_array of global pointers
-      _g_remote_ptrs.init( THREADS );
-
-      // (3) allocate and zero storage; write to _g_remote_ptrs
-      _g_local_ptr = upcxx::allocate<T>( MYTHREAD, LLD * _n_local );
-      _local_ptr = (T *) _g_local_ptr;
-      for ( long ij = 0; ij < LLD * _n_local; ij++ )
-        _local_ptr[ij] = (T) 0;
-      _g_remote_ptrs[MYTHREAD] = _g_local_ptr;
-      upcxx::barrier();
-
-      // set flush threashold for bins
-      _bin_flush_threshold = DEFAULT_BIN_FLUSH_THRESHOLD;
+      // initialize distributed storage
+      init_arrays();
 
       // set up bins
       for ( int tid = 0; tid < THREADS; tid++ )
@@ -393,12 +413,6 @@ namespace cm
 #else
         _update_bins.push_back( new Bin<T>( _g_remote_ptrs[tid] ) );
 #endif
-
-      // init the progress() interval to its default value
-      _progress_interval = DEFAULT_PROGRESS_INTERVAL;
-
-      // init counter for initiating calls to progress()
-      _flush_counter = 0;
 
       // consistency check is off by default
 #ifdef ENABLE_CONSISTENCY_CHECK
@@ -463,8 +477,7 @@ namespace cm
     get_local_data_copy() const
     {
       T * copy_ptr = new T[LLD * _n_local];
-      for ( long ij = 0; ij < LLD * _n_local; ij++ )
-        copy_ptr[ij] = _local_ptr[ij];
+      std::copy( _local_ptr, _local_ptr + LLD * _n_local, copy_ptr );
       return copy_ptr;
     }
 
@@ -490,8 +503,7 @@ namespace cm
       commit();
 
       // zero local storage
-      for ( long ij = 0; ij < LLD * _n_local; ij++ )
-        _local_ptr[ij] = (T) 0;
+      std::fill( _local_ptr, _local_ptr + LLD * _n_local, 0 );
 
       // synchronize
       upcxx::barrier();
