@@ -947,6 +947,9 @@ namespace cm
           for ( long i = _m_local - 1; i >= 0; i-- )
             _local_ptr[i + j * LLD] = _local_ptr[i + j * _m_local];
 
+      // sync post expansion (ops on distributed matrix elems can start again)
+      upcxx::barrier();
+
       // free distributed type
       MPI_Type_free( &distmat );
     }
@@ -1025,6 +1028,9 @@ namespace cm
         for ( long j = _n_local - 1; j > 0; j-- )
           for ( long i = _m_local - 1; i >= 0; i-- )
             _local_ptr[i + j * LLD] = _local_ptr[i + j * _m_local];
+
+      // sync post expansion (ops on distributed matrix elems can start again)
+      upcxx::barrier();
 
       // free distributed type
       MPI_Type_free( &distmat );
