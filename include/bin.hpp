@@ -12,44 +12,48 @@ namespace cm
 
   /// @cond INTERNAL_DOCS
 
+  // a tuple containing the elemental update and its (remote) linear index
+  template<typename T>
+  struct elem
+  {
+    T element;
+    long index;
+    elem( T element_, long index_ ) :
+      element(element_), index(index_) {};
+  };
+
   /**
    * A task that performs remote updates (spawned by Bin<T>)
    * \param g_my_data Reference to local storage on the target
-   * \param g_ix Reference to update indexing (already transferred target)
    * \param g_data Reference to update data (already transferred target)
    */
   template <typename T>
   void
   update_task( long size,
-               upcxx::global_ptr<T>    g_my_data,
-               upcxx::global_ptr<long> g_ix,
-               upcxx::global_ptr<T>    g_data )
+               upcxx::global_ptr<T>        g_my_data,
+               upcxx::global_ptr<elem<T> > g_data )
   {
     // local ptrs (for casts)
-    long *p_ix;
-    T *p_data, *p_my_data;
+    elem<T> *p_data;
+    T *p_my_data;
 
 #ifndef NOCHECK
     assert( g_my_data.tid() == MYTHREAD );
-    assert( g_ix.tid()      == MYTHREAD );
     assert( g_data.tid()    == MYTHREAD );
 #endif
 
     // cast to local ptrs
-    p_ix = (long *) g_ix;
-    p_data = (T *) g_data;
+    p_data = (elem<T> *) g_data;
     p_my_data = (T *) g_my_data;
 
     // update
     for ( long k = 0; k < size; k++ )
-      p_my_data[p_ix[k]] += p_data[k];
+      p_my_data[p_data[k].index] += p_data[k].element;
 
     // free local (but remotely allocated) storage
-    upcxx::deallocate( g_ix );
     upcxx::deallocate( g_data );
 
   } // end of update_task
-
 
   /**
    * Implements the binning / remote application for a single thread
@@ -65,8 +69,7 @@ namespace cm
 
     int _remote_tid;                      // thread id of target
     upcxx::global_ptr<T> _g_remote_data;  // global_ptr _local_ to target
-    std::vector<long> _ix;                // linear indexing for target
-    std::vector<T> _data;                 // update data for target
+    std::vector<elem<T> > _data;          // update data for target
 #ifdef ENABLE_PROGRESS_THREAD
     pthread_mutex_t *_tq_mutex;           // mutex protecting task-queue ops
 #endif
@@ -74,7 +77,6 @@ namespace cm
     inline void
     clear()
     {
-      _ix.clear();
       _data.clear();
     }
 
@@ -106,7 +108,7 @@ namespace cm
     inline long
     size() const
     {
-      return _ix.size();
+      return _data.size();
     }
 
     /**
@@ -117,8 +119,7 @@ namespace cm
     inline void
     append( T data, long ij )
     {
-      _ix.push_back( ij );
-      _data.push_back( data );
+      _data.push_back( elem<T>( data, ij ) );
     }
 
     /**
@@ -130,26 +131,23 @@ namespace cm
     flush( upcxx::event *e )
     {
       // global ptrs to local storage for async remote copy
-      upcxx::global_ptr<long> g_ix;
-      upcxx::global_ptr<T> g_data;
+      upcxx::global_ptr<elem<T> > g_data;
 
 #ifdef ENABLE_PROGRESS_THREAD
       pthread_mutex_lock( _tq_mutex );
 #endif
 
       // allocate remote storage
-      g_ix = upcxx::allocate<long>( _remote_tid, _ix.size() );
-      g_data = upcxx::allocate<T>( _remote_tid, _data.size() );
+      g_data = upcxx::allocate<elem<T> >( _remote_tid, _data.size() );
 
       // copy to remote
-      upcxx::copy( (upcxx::global_ptr<long>) _ix.data(), g_ix, _ix.size() );
-      upcxx::copy( (upcxx::global_ptr<T>) _data.data(), g_data, _data.size() );
+      upcxx::copy( (upcxx::global_ptr<elem<T> >) _data.data(), g_data, _data.size() );
 
       // spawn the remote update (responsible for deallocating g_ix, g_data)
       upcxx::async( _remote_tid, e )( update_task<T>,
                                       _data.size(),
                                       _g_remote_data,
-                                      g_ix, g_data );
+                                      g_data );
 
 #ifdef ENABLE_PROGRESS_THREAD
       pthread_mutex_unlock( _tq_mutex );
