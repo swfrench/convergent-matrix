@@ -30,9 +30,12 @@
 
 #pragma once
 
-#include <vector>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 #include <cassert>
+
+#include <algorithm>
 
 #include <upcxx.h>
 
@@ -50,6 +53,10 @@
       defined(ENABLE_MPIIO_SUPPORT) )
 #include <mpi.h>
 #define ENABLE_MPI_HELPERS
+#endif
+
+#ifdef ENABLE_UPDATE_TIMING
+#include <omp.h>
 #endif
 
 // cm additions / internals
@@ -106,6 +113,7 @@ namespace cm
       // check the stop flag, possibly exiting
       if ( *args->progress_thread_stop ) {
         pthread_mutex_unlock( args->tq_mutex );
+        delete args;
         return NULL;
       }
 
@@ -117,6 +125,32 @@ namespace cm
       // pause briefly
       usleep( PROGRESS_HELPER_PAUSE_USEC );
     }
+  }
+
+  /**
+   * Wrapper for \c std::rand() for use in \c std::random_shuffle() (called in
+   * \c permute() below).
+   */
+  int
+  rgen( int n )
+  {
+    return std::rand() % n;
+  }
+
+  /**
+   * Apply a random permutation (in place) to the supplied array.
+   * \param xs Array of type \c int
+   * \param nx Length of array \c xs
+   *
+   * Seeds std::rand() in a manner that should be ok even if all threads hit
+   * \c permute() at nearly the same time.
+   */
+  void
+  permute( int *xs, int n )
+  {
+    unsigned seed = ( 1 + MYTHREAD ) * std::time( NULL );
+    std::srand( seed );
+    std::random_shuffle( xs, xs + n, rgen );
   }
 
   /// @endcond
@@ -150,6 +184,7 @@ namespace cm
     int _flush_counter;
     int _progress_interval;
     int _bin_flush_threshold;
+    int *_bin_flush_order;
     Bin<T> **_update_bins;
     upcxx::event _e_update;
 
@@ -157,6 +192,10 @@ namespace cm
     T *_local_ptr;
     upcxx::global_ptr<T> _g_local_ptr;
     upcxx::shared_array<upcxx::global_ptr<T> > _g_remote_ptrs;
+
+#ifdef ENABLE_UPDATE_TIMING
+    double _wt_init;
+#endif
 
     // replicated consistency checks
 #ifdef ENABLE_CONSISTENCY_CHECK
@@ -195,11 +234,12 @@ namespace cm
       // sync (ensuring the exchange is complete)
       upcxx::barrier();
     }
-    
+
     // initialize the update bins
     inline void
     init_bins()
     {
+      // set up the bin objects
       _update_bins = new Bin<T> * [THREADS];
       for ( int tid = 0; tid < THREADS; tid++ )
 #ifdef ENABLE_PROGRESS_THREAD
@@ -207,6 +247,12 @@ namespace cm
 #else
         _update_bins[tid] = new Bin<T>( _g_remote_ptrs[tid] );
 #endif
+
+      // set up random flushing order
+      _bin_flush_order = new int [THREADS];
+      for ( int tid = 0; tid < THREADS; tid++ )
+        _bin_flush_order[tid] = tid;
+      permute( _bin_flush_order, THREADS );
     }
 
     // flush bins that are "full" (exceed the current threshold)
@@ -214,9 +260,11 @@ namespace cm
     flush( int thresh = 0 )
     {
       // flush the bins
-      for ( int tid = 0; tid < THREADS; tid++ )
+      for ( int b = 0; b < THREADS; b++ ) {
+        int tid = _bin_flush_order[b];
         if ( _update_bins[tid]->size() > thresh )
           _update_bins[tid]->flush( &_e_update );
+      }
 
 #ifdef ENABLE_PROGRESS_THREAD
       if ( ! _progress_thread_running ) {
@@ -433,6 +481,10 @@ namespace cm
       _progress_thread_running = false;
       pthread_mutex_init( &_tq_mutex, NULL );
 #endif
+
+#ifdef ENABLE_UPDATE_TIMING
+      _wt_init = omp_get_wtime();
+#endif
     }
 
     /**
@@ -456,6 +508,7 @@ namespace cm
       for ( int tid = 0; tid < THREADS; tid++ )
         delete _update_bins[tid];
       delete [] _update_bins;
+      delete [] _bin_flush_order;
 
       // finally, delete the gasnet-addressable local storage
       upcxx::deallocate<T>( _g_local_ptr );
@@ -698,11 +751,17 @@ namespace cm
     void
     update( LocalMatrix<T> *Mat, long *ix )
     {
+#ifdef ENABLE_UPDATE_TIMING
+      double wt0, wt1;
+#endif
 #ifndef NOCHECK
       // must be square to be symmetric
       assert( Mat->m() == Mat->n() );
 #endif
 
+#ifdef ENABLE_UPDATE_TIMING
+      wt0 = omp_get_wtime();
+#endif
       // bin the local update
       for ( long j = 0; j < Mat->n(); j++ ) {
         int pcol = ( ix[j] / NB ) % NPCOL;
@@ -714,6 +773,11 @@ namespace cm
             _update_bins[tid]->append( (*Mat)( i, j ), ij );
           }
       }
+#ifdef ENABLE_UPDATE_TIMING
+      wt1 = omp_get_wtime();
+      printf( "[%s] %f binning time: %f s\n", __func__,
+              wt1 - _wt_init, wt1 - wt0 );
+#endif
 
 #ifdef ENABLE_CONSISTENCY_CHECK
       if ( _consistency_mode )
@@ -724,7 +788,15 @@ namespace cm
 #endif
 
       // possibly flush bins
+#ifdef ENABLE_UPDATE_TIMING
+      wt0 = omp_get_wtime();
+#endif
       flush( _bin_flush_threshold );
+#ifdef ENABLE_UPDATE_TIMING
+      wt1 = omp_get_wtime();
+      printf( "[%s] %f flush time: %f s\n", __func__,
+              wt1 - _wt_init, wt1 - wt0 );
+#endif
     }
 
     /**
