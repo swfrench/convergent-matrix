@@ -80,9 +80,9 @@
 namespace cm
 {
 
-#ifdef ENABLE_PROGRESS_THREAD
-
   /// @cond INTERNAL_DOCS
+
+#ifdef ENABLE_PROGRESS_THREAD
 
   /**
    * Argument struct for the \c progress_helper() thread
@@ -127,6 +127,8 @@ namespace cm
     }
   }
 
+#endif // ENABLE_PROGRESS_THREAD
+
   /**
    * Wrapper for \c std::rand() for use in \c std::random_shuffle() (called in
    * \c permute() below).
@@ -154,8 +156,6 @@ namespace cm
   }
 
   /// @endcond
-
-#endif // ENABLE_PROGRESS_THREAD
 
   /**
    * Convergent matrix abstraction
