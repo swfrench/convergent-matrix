@@ -30,9 +30,9 @@ namespace cm
     T *p_data, *p_my_data;
 
 #ifndef NOCHECK
-    assert( g_my_data.tid() == MYTHREAD );
-    assert( g_ix.tid()      == MYTHREAD );
-    assert( g_data.tid()    == MYTHREAD );
+    assert( g_my_data.where() == MYTHREAD );
+    assert( g_ix.where()      == MYTHREAD );
+    assert( g_data.where()    == MYTHREAD );
 #endif
 
     // cast to local ptrs
@@ -88,7 +88,7 @@ namespace cm
      * GASNet operations
      */
     Bin( upcxx::global_ptr<T> g_remote_data, pthread_mutex_t * tq_mutex ) :
-      _remote_tid(g_remote_data.tid()), _g_remote_data(g_remote_data), _tq_mutex(tq_mutex)
+      _remote_tid(g_remote_data.where()), _g_remote_data(g_remote_data), _tq_mutex(tq_mutex)
     {}
 #else
     /**
@@ -96,7 +96,7 @@ namespace cm
      * \param g_remote_data global_ptr<T> reference to the target-local storage
      */
     Bin( upcxx::global_ptr<T> g_remote_data ) :
-      _remote_tid(g_remote_data.tid()), _g_remote_data(g_remote_data)
+      _remote_tid(g_remote_data.where()), _g_remote_data(g_remote_data)
     {}
 #endif
 
