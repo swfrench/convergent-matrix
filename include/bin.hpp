@@ -63,6 +63,7 @@ namespace cm
 
    private:
 
+    bool _init;                           // whether fields intialized
     int _remote_tid;                      // thread id of target
     upcxx::global_ptr<T> _g_remote_data;  // global_ptr _local_ to target
     std::vector<long> _ix;                // linear indexing for target
@@ -80,24 +81,69 @@ namespace cm
 
    public:
 
+    /**
+     * Create an uninitialized Bin object
+     */
+    Bin()
+      _init(false)
+    {}
+
 #ifdef ENABLE_PROGRESS_THREAD
     /**
-     * Initialize the Bin object for a given target
+     * Create the Bin object associated with a given target
      * \param g_remote_data global_ptr<T> reference to the target-local storage
      * \param tq_mutex pthread mutex protecting the task queue and associated
      * GASNet operations
      */
     Bin( upcxx::global_ptr<T> g_remote_data, pthread_mutex_t * tq_mutex ) :
-      _remote_tid(g_remote_data.where()), _g_remote_data(g_remote_data), _tq_mutex(tq_mutex)
+      _init(true),
+      _remote_tid(g_remote_data.where()),
+      _g_remote_data(g_remote_data),
+      _tq_mutex(tq_mutex)
     {}
+
+    /**
+     * Initialize the previously empty Bin object for a given target
+     * \param g_remote_data global_ptr<T> reference to the target-local storage
+     * \param tq_mutex pthread mutex protecting the task queue and associated
+     * GASNet operations
+     *
+     * \b Note: It is erroneous to call this on a previously initialized Bin.
+     */
+    inline void
+    init( upcxx::global_ptr<T> g_remote_data, pthread_mutex_t * tq_mutex )
+    {
+      assert( ! _init );
+      _remote_tid = g_remote_data.where();
+      _g_remote_data = g_remote_data;
+      _tq_mutex = tq_mutex;
+      _init = true;
+    }
 #else
     /**
-     * Initialize the Bin object for a given target
+     * Create the Bin object associated with a given target
      * \param g_remote_data global_ptr<T> reference to the target-local storage
      */
     Bin( upcxx::global_ptr<T> g_remote_data ) :
-      _remote_tid(g_remote_data.where()), _g_remote_data(g_remote_data)
+      _init(true),
+      _remote_tid(g_remote_data.where()),
+      _g_remote_data(g_remote_data)
     {}
+
+    /**
+     * Initialize the previously empty Bin object for a given target
+     * \param g_remote_data global_ptr<T> reference to the target-local storage
+     *
+     * \b Note: It is erroneous to call this on a previously initialized Bin.
+     */
+    inline void
+    init( upcxx::global_ptr<T> g_remote_data )
+    {
+      assert( ! _init );
+      _remote_tid = g_remote_data.where();
+      _g_remote_data = g_remote_data;
+      _init = true;
+    }
 #endif
 
     /**
@@ -129,6 +175,10 @@ namespace cm
     void
     flush( upcxx::event *e )
     {
+#ifndef NOCHECK
+      assert( _init );
+#endif
+
       // global ptrs to local storage for async remote copy
       upcxx::global_ptr<long> g_ix;
       upcxx::global_ptr<T> g_data;

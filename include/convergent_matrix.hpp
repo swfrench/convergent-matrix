@@ -184,14 +184,13 @@ namespace cm
     int _flush_counter;
     int _progress_interval;
     int _bin_flush_threshold;
-    int *_bin_flush_order;
-    Bin<T> **_update_bins;
+    int _bin_flush_order[NPROW * NPCOL];
+    Bin<T> _update_bins[NPROW * NPCOL];
     upcxx::event _e_update;
 
     // distributed storage arrays (local and remote)
     T *_local_ptr;
-    upcxx::global_ptr<T> _g_local_ptr;
-    upcxx::shared_array<upcxx::global_ptr<T> > _g_remote_ptrs;
+    upcxx::global_ptr<T> _remote_ptrs[NPROW * NPCOL];
 
 #ifdef ENABLE_UPDATE_TIMING
     double _wt_init;
@@ -218,20 +217,34 @@ namespace cm
     inline void
     init_arrays()
     {
-      // initialize shared_array of global pointers
-      _g_remote_ptrs.init( THREADS );
+      // initialize shared_array of global_ptrs
+      upcxx::shared_array<upcxx::global_ptr<T> > shared_remote_ptrs;
+      shared_remote_ptrs.init( NPROW * NPCOL );
 
       // allocate GASNet addressable storage
-      _g_local_ptr = upcxx::allocate<T>( MYTHREAD, LLD * _n_local );
+      upcxx::global_ptr<T> _g_local_ptr =
+        upcxx::allocate<T>( MYTHREAD, LLD * _n_local );
 
       // cast to local ptr and zero
       _local_ptr = (T *) _g_local_ptr;
       std::fill( _local_ptr, _local_ptr + LLD * _n_local, 0 );
 
       // exchange our global_ptr ref with the other upcxx threads
-      _g_remote_ptrs[MYTHREAD] = _g_local_ptr;
+      shared_remote_ptrs[MYTHREAD] = _g_local_ptr;
 
-      // sync (ensuring the exchange is complete)
+      // sync (ensuring the shared_array has been populated)
+      upcxx::barrier();
+
+      // copy remote pointers into _remote_ptrs cache, ensuring that future use
+      // of remote pointers does not incur a global_ref.get()
+      for ( int tid = 0; tid < NPROW * NPCOL; tid++ )
+        // implicit type conversion in cast from shared_remote_ptrs[tid] to
+        // global_ptr<T> (resolves remote global_ref<global_ptr<T> > reference
+        // returned by shared_array's operator[])
+        _remote_ptrs[tid] = shared_remote_ptrs[tid];
+
+      // sync again (ensuring all threads have cached the global_ptrs before
+      // shared_remote_ptrs goes out of scope)
       upcxx::barrier();
     }
 
@@ -240,19 +253,17 @@ namespace cm
     init_bins()
     {
       // set up the bin objects
-      _update_bins = new Bin<T> * [THREADS];
-      for ( int tid = 0; tid < THREADS; tid++ )
+      for ( int tid = 0; tid < NPROW * NPCOL; tid++ )
 #ifdef ENABLE_PROGRESS_THREAD
-        _update_bins[tid] = new Bin<T>( _g_remote_ptrs[tid], &_tq_mutex );
+        _update_bins[tid].init( _remote_ptrs[tid], &_tq_mutex );
 #else
-        _update_bins[tid] = new Bin<T>( _g_remote_ptrs[tid] );
+        _update_bins[tid].init( _remote_ptrs[tid] );
 #endif
 
       // set up random flushing order
-      _bin_flush_order = new int [THREADS];
-      for ( int tid = 0; tid < THREADS; tid++ )
+      for ( int tid = 0; tid < NPROW * NPCOL; tid++ )
         _bin_flush_order[tid] = tid;
-      permute( _bin_flush_order, THREADS );
+      permute( _bin_flush_order, NPROW * NPCOL );
     }
 
     // flush bins that are "full" (exceed the current threshold)
@@ -260,10 +271,10 @@ namespace cm
     flush( int thresh = 0 )
     {
       // flush the bins
-      for ( int b = 0; b < THREADS; b++ ) {
+      for ( int b = 0; b < NPROW * NPCOL; b++ ) {
         int tid = _bin_flush_order[b];
-        if ( _update_bins[tid]->size() > thresh )
-          _update_bins[tid]->flush( &_e_update );
+        if ( _update_bins[tid].size() > thresh )
+          _update_bins[tid].flush( &_e_update );
       }
 
 #ifdef ENABLE_PROGRESS_THREAD
@@ -504,14 +515,8 @@ namespace cm
 #endif
       commit();
 
-      // clean up the bins
-      for ( int tid = 0; tid < THREADS; tid++ )
-        delete _update_bins[tid];
-      delete [] _update_bins;
-      delete [] _bin_flush_order;
-
-      // finally, delete the gasnet-addressable local storage
-      upcxx::deallocate<T>( _g_local_ptr );
+      // delete the GASNet-addressable local storage
+      upcxx::deallocate<T>( upcxx::global_ptr<T>( _local_ptr ) );
     }
 
     /**
@@ -684,8 +689,9 @@ namespace cm
       int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
       long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
                         ( ix / ( MB * NPROW ) ) * MB + ix % MB;
-      // temporary hack: long index into global_ptr not currently supported
-      return _g_remote_ptrs[tid].get() [(int)ij];
+      // operator[ij] on global_ptr[tid] returns a global_ref to index ij on
+      // target; implicit conversion (resolution) when returning type T
+      return _remote_ptrs[tid][ij];
     }
 
     /**
@@ -704,7 +710,7 @@ namespace cm
         for ( long i = 0; i < Mat->m(); i++ ) {
           int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
           long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
-          _update_bins[tid]->append( (*Mat)( i, j ), ij );
+          _update_bins[tid].append( (*Mat)( i, j ), ij );
         }
       }
 
@@ -732,7 +738,7 @@ namespace cm
       int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
       long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
                         ( ix / ( MB * NPROW ) ) * MB + ix % MB;
-      _update_bins[tid]->append( elem, ij );
+      _update_bins[tid].append( elem, ij );
 
 #ifdef ENABLE_CONSISTENCY_CHECK
       if ( _consistency_mode )
@@ -770,7 +776,7 @@ namespace cm
           if ( ix[i] <= ix[j] ) {
             int tid = pcol + NPCOL * ( ( ix[i] / MB ) % NPROW );
             long ij = off_j + ( ix[i] / ( MB * NPROW ) ) * MB + ix[i] % MB;
-            _update_bins[tid]->append( (*Mat)( i, j ), ij );
+            _update_bins[tid].append( (*Mat)( i, j ), ij );
           }
       }
 #ifdef ENABLE_UPDATE_TIMING
@@ -824,7 +830,7 @@ namespace cm
             int tid = ( jx / NB ) % NPCOL + NPCOL * ( ( ix / MB ) % NPROW );
             long ij = LLD * ( ( jx / ( NB * NPCOL ) ) * NB + jx % NB ) +
                               ( ix / ( MB * NPROW ) ) * MB + ix % MB;
-            _update_bins[tid]->append( _local_ptr[i + j * LLD], ij );
+            _update_bins[tid].append( _local_ptr[i + j * LLD], ij );
 
 #ifdef ENABLE_CONSISTENCY_CHECK
             if ( _consistency_mode )
