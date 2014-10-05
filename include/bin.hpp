@@ -84,7 +84,7 @@ namespace cm
     /**
      * Create an uninitialized Bin object
      */
-    Bin()
+    Bin() :
       _init(false)
     {}
 
