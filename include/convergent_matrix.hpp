@@ -92,6 +92,9 @@ namespace cm
     // lock for operations on the task queue
     pthread_mutex_t * tq_mutex;
 
+    // copies of _max_dispatch_in/out for calls to upcxx::advance()
+    int max_dispatch_in, max_dispatch_out;
+
     // boolean to signal the progres thread to exit
     bool *progress_thread_stop;
   };
@@ -106,7 +109,7 @@ namespace cm
     // re-cast args ptr
     progress_helper_args *args = (progress_helper_args *)args_ptr;
 
-    // spin in upcxx::drain()
+    // spin in upcxx::advance()
     while ( 1 ) {
       pthread_mutex_lock( args->tq_mutex );
 
@@ -118,7 +121,7 @@ namespace cm
       }
 
       // drain the task queue
-      upcxx::drain();
+      upcxx::advance( args->max_dispatch_in, args->max_dispatch_out );
 
       pthread_mutex_unlock( args->tq_mutex );
 
@@ -183,6 +186,7 @@ namespace cm
     // update binning and application
     int _flush_counter;
     int _progress_interval;
+    int _max_dispatch_in, _max_dispatch_out;
     int _bin_flush_threshold;
     int _bin_flush_order[NPROW * NPCOL];
     Bin<T> _update_bins[NPROW * NPCOL];
@@ -286,7 +290,7 @@ namespace cm
         // check whether we should pause to flush the task queue
         if ( thresh == 0 || _flush_counter == _progress_interval ) {
           // drain the task queue
-          upcxx::drain();
+          upcxx::advance( _max_dispatch_in, _max_dispatch_out );
           // reset the counter
           _flush_counter = 0;
         }
@@ -331,6 +335,8 @@ namespace cm
       // set up progress helper argument struct
       args = new progress_helper_args;
       args->tq_mutex = &_tq_mutex;
+      args->max_dispatch_in = _max_dispatch_in;
+      args->max_dispatch_out = _max_dispatch_out;
       args->progress_thread_stop = &_progress_thread_stop;
 
       // set thread as joinable
@@ -474,6 +480,11 @@ namespace cm
 
       // check minimum local leading dimension compatible with LLD
       assert( _m_local <= LLD );
+
+      // estimate upper bounds on the numbers of incoming and outgoing tasks to
+      // be dispatched per round of upcxx::advance()
+      _max_dispatch_out = NPROW * NPCOL;  // hitting all target bins
+      _max_dispatch_in = _max_dispatch_out * _max_dispatch_out; // all-to-all
 
       // initialize distributed storage
       init_arrays();
@@ -874,7 +885,7 @@ namespace cm
       upcxx::barrier();
 
       // catch the last wave of tasks, if any
-      upcxx::drain();
+      upcxx::advance( _max_dispatch_in, _max_dispatch_out );
 
       // wait on remote tasks
       _e_update.wait();
