@@ -1,5 +1,5 @@
 # local path to upcxx install
-UPCXX_PATH = $(HOME)/upcxx/edison/upcxx_install
+UPCXX_PATH = $(HOME)/upcxx/edison/gnu/upcxx.master/upcxx_install
 
 # C++ compiler
 CXX = CC
