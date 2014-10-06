@@ -1,6 +1,12 @@
 #include <cstdio>
 #include <upcxx.h>
 
+#ifdef ENABLE_CONSISTENCY_CHECK
+// optional: required for consistency checks
+#include <mpi.h>
+#define MPI_INIT_REQUIRED
+#endif
+
 #include "convergent_matrix.hpp"
 
 // global matrix dimensions
@@ -29,10 +35,12 @@ simple()
   // initialize the distributed matrix abstraction
   cmat_t dist_mat( M, N );
 
+#ifdef ENABLE_CONSISTENCY_CHECK
   // optional: turn on replicated consistency checks (run during commit)
   // * requires enough memory to replicate the entire matrix to all threads
   // * requires a working MPI implementation
   dist_mat.consistency_check_on();
+#endif
 
   // create and apply an update ...
   {
@@ -74,8 +82,22 @@ main( int argc, char **argv )
   // initialize upcxx
   upcxx::init( &argc, &argv );
 
+#ifdef MPI_INIT_REQUIRED
+  // optional: required for consistency checks to work
+  int mpi_init;
+  MPI_Initialized( &mpi_init );
+  if ( ! mpi_init )
+    MPI_Init( &argc, &argv );
+#endif
+
   // run the example above
   simple();
+
+#ifdef MPI_INIT_REQUIRED
+  // optional: required for consistency checks to work
+  if ( ! mpi_init )
+    MPI_Finalize();
+#endif
 
   // shut down upcxx
   upcxx::finalize();
