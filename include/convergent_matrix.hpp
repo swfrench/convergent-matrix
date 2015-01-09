@@ -978,7 +978,12 @@ namespace cm
      * \b Note: No implicit \c commit() before matrix data is written - always
      * call \c commit() first.
      *
-     * \b Note: Requires compilation with \c ENABLE_MPIIO_SUPPORT.
+     * \b Note: Requires compilation with \c ENABLE_MPIIO_SUPPORT and MPI must
+     * already have been initialized by the user.
+     *
+     * \b Note: If compiled with \c ENABLE_PROGRESS_THREAD, this routine will
+     * require MPI to have been initialized with a thread support level of at
+     * least \c MPI_THREAD_FUNNELED.
      */
     void
     save( const char *fname )
@@ -1074,7 +1079,12 @@ namespace cm
      *
      * \b Note: Replaces the current contents of the distributed storage array.
      *
-     * \b Note: Requires compilation with \c ENABLE_MPIIO_SUPPORT.
+     * \b Note: Requires compilation with \c ENABLE_MPIIO_SUPPORT and MPI must
+     * already have been initialized by the user.
+     *
+     * \b Note: If compiled with \c ENABLE_PROGRESS_THREAD, this routine will
+     * require MPI to have been initialized with a thread support level of at
+     * least \c MPI_THREAD_FUNNELED.
      */
     void
     load( const char *fname )

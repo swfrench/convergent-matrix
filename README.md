@@ -37,6 +37,13 @@ to compile GASNet with the UDP network conduit enabled (regardless of whether
 you intend to use it) to ensure that C++ headers are properly generated.
 This can be achieved simply by configuring with `--enable-udp`.
 
+**Note**: In order to use the `load()` and `save()` methods, which use MPI-IO
+to read / write distributed matrix data to disk (in hopes of taking advantage
+of collective buffering optimizations, etc.), you must first initialize MPI in
+your program. Further, if you have compiled `ConvergentMatrix` with support for
+a progress thread, you must initialize MPI with thread support at the level of
+`MPI_THREAD_FUNNELED` or higher.
+
 ## References
 
 [1] Y. Zheng, et al., "UPC++: A PGAS Extension for C++," accepted to IPDPS 2014.
