@@ -37,6 +37,10 @@ to compile GASNet with the UDP network conduit enabled (regardless of whether
 you intend to use it) to ensure that C++ headers are properly generated.
 This can be achieved simply by configuring with `--enable-udp`.
 
+A working MPI implementation is also required, and your code must be compiled
+with `ENABLE_MPIIO_SUPPORT`, if the MPI-IO-based `load()` and `save()` methods
+are to be available.
+
 **Note**: In order to use the `load()` and `save()` methods, which use MPI-IO
 to read / write distributed matrix data to disk (in hopes of taking advantage
 of collective buffering optimizations, etc.), you must first initialize MPI in
