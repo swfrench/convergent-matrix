@@ -405,12 +405,20 @@ namespace cm
     {
       long ncheck = 0;
       int mpi_init;
+#ifdef ENABLE_PROGRESS_THREAD
+      int mpi_thread;
+#endif // ENABLE_PROGRESS_THREAD
       const T rtol = 1e-8;
       T * summed_updates;
 
       // make sure MPI is already initialized
       assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
       assert( mpi_init );
+#ifdef ENABLE_PROGRESS_THREAD
+      // make sure MPI has sufficient thread support
+      assert( MPI_Query_thread( &mpi_thread ) == MPI_SUCCESS );
+      assert( mpi_thread >= MPI_THREAD_FUNNELED );
+#endif // ENABLE_PROGRESS_THREAD
 
       // sum the recorded updates across threads
       summed_updates = new T [_m * _n];
@@ -976,6 +984,9 @@ namespace cm
     save( const char *fname )
     {
       int mpi_init, mpi_rank, distmat_size, write_count;
+#ifdef ENABLE_PROGRESS_THREAD
+      int mpi_thread;
+#endif // ENABLE_PROGRESS_THREAD
       double wt_io, wt_io_max;
       MPI_Status status;
       MPI_Datatype distmat;
@@ -987,6 +998,11 @@ namespace cm
       // make sure MPI is already initialized
       assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
       assert( mpi_init );
+#ifdef ENABLE_PROGRESS_THREAD
+      // make sure MPI has sufficient thread support
+      assert( MPI_Query_thread( &mpi_thread ) == MPI_SUCCESS );
+      assert( mpi_thread >= MPI_THREAD_FUNNELED );
+#endif // ENABLE_PROGRESS_THREAD
 
       // check process grid ordering
       MPI_Comm_rank( MPI_COMM_WORLD, &mpi_rank );
@@ -1064,6 +1080,9 @@ namespace cm
     load( const char *fname )
     {
       int mpi_init, mpi_rank, distmat_size, read_count;
+#ifdef ENABLE_PROGRESS_THREAD
+      int mpi_thread;
+#endif // ENABLE_PROGRESS_THREAD
       double wt_io, wt_io_max;
       MPI_Status status;
       MPI_Datatype distmat;
@@ -1075,6 +1094,11 @@ namespace cm
       // make sure MPI is already initialized
       assert( MPI_Initialized( &mpi_init ) == MPI_SUCCESS );
       assert( mpi_init );
+#ifdef ENABLE_PROGRESS_THREAD
+      // make sure MPI has sufficient thread support
+      assert( MPI_Query_thread( &mpi_thread ) == MPI_SUCCESS );
+      assert( mpi_thread >= MPI_THREAD_FUNNELED );
+#endif // ENABLE_PROGRESS_THREAD
 
       // check process grid ordering
       MPI_Comm_rank( MPI_COMM_WORLD, &mpi_rank );
