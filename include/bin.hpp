@@ -5,7 +5,31 @@
 #ifdef ENABLE_PROGRESS_THREAD
 #include <pthread.h>
 #endif
+#ifdef FLUSH_ALLOC_RETRY
+#include <algorithm> // std::min
+#include <unistd.h>  // usleep
+#define RETRY_MIN_INTERVAL 10	    // ms
+#define RETRY_MAX_INTERVAL 1000	    // ms
+#define RETRY_INTERVAL_FACTOR 2
+#define RETRY_MAX_ITER 100
+#endif
 #include <upcxx.h>
+
+#ifdef FLUSH_ALLOC_RETRY
+// retry remote allocation statement A with exponential backoff
+#define ALLOC_WRAP( A ) \
+  do { \
+    long iter = 0; \
+    useconds_t t = RETRY_MIN_INTERVAL; \
+    while ( ( A ).raw_ptr() == NULL && iter++ < RETRY_MAX_ITER ) { \
+      usleep( 1000 * t ); \
+      t = std::min( t * RETRY_INTERVAL_FACTOR, RETRY_MAX_INTERVAL ); \
+    } \
+  } while(0)
+#else
+// just try once
+#define ALLOC_WRAP( A ) A
+#endif
 
 namespace cm
 {
@@ -188,8 +212,14 @@ namespace cm
 #endif
 
       // allocate remote storage
-      g_ix = upcxx::allocate<long>( _remote_tid, _ix.size() );
-      g_data = upcxx::allocate<T>( _remote_tid, _data.size() );
+      ALLOC_WRAP( g_ix = upcxx::allocate<long>( _remote_tid, _ix.size() ) );
+#ifdef NOCHECK
+      assert( g_ix.raw_ptr() != NULL );
+#endif
+      ALLOC_WRAP( g_data = upcxx::allocate<T>( _remote_tid, _data.size() ) );
+#ifdef NOCHECK
+      assert( g_data.raw_ptr() != NULL );
+#endif
 
       // copy to remote
       upcxx::copy( (upcxx::global_ptr<long>) _ix.data(), g_ix, _ix.size() );
