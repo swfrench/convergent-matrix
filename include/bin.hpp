@@ -23,7 +23,7 @@
     useconds_t t = RETRY_MIN_INTERVAL; \
     while ( ( A ).raw_ptr() == NULL && iter++ < RETRY_MAX_ITER ) { \
       usleep( 1000 * t ); \
-      t = std::min( t * RETRY_INTERVAL_FACTOR, RETRY_MAX_INTERVAL ); \
+      t = std::min( t * RETRY_INTERVAL_FACTOR, (useconds_t) RETRY_MAX_INTERVAL ); \
     } \
   } while(0)
 #else
