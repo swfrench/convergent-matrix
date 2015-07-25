@@ -17,6 +17,11 @@
 
 #ifdef FLUSH_ALLOC_RETRY
 // retry remote allocation statement A with exponential backoff
+#ifdef FLUSH_WARN_ON_RETRY
+#define FLUSH_WARN_RETRY if ( iter > 0 ) printf( "Warning: Thread %4i : ALLOC_WRAP required %li attempts\n", MYTHREAD, iter );
+#else
+#define FLUSH_WARN_RETRY /* noop */
+#endif
 #define ALLOC_WRAP( A ) \
   do { \
     long iter = 0; \
@@ -25,6 +30,7 @@
       usleep( 1000 * t ); \
       t = std::min( t * RETRY_INTERVAL_FACTOR, (useconds_t) RETRY_MAX_INTERVAL ); \
     } \
+    FLUSH_WARN_RETRY \
   } while(0)
 #else
 // just try once
