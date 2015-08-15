@@ -2,28 +2,39 @@
 
 #include <cassert>
 #include <vector>
+
 #ifdef ENABLE_PROGRESS_THREAD
 #include <pthread.h>
 #endif
+
 #ifdef FLUSH_ALLOC_RETRY
 #include <algorithm> // std::min
 #include <unistd.h>  // usleep
-#define RETRY_MIN_INTERVAL 10	    // ms
-#define RETRY_MAX_INTERVAL 1000	    // ms
-#define RETRY_INTERVAL_FACTOR 2
-#define RETRY_MAX_ITER 100
+#ifndef RETRY_MIN_INTERVAL
+#define RETRY_MIN_INTERVAL 10       // ms
 #endif
+#ifndef RETRY_MAX_INTERVAL
+#define RETRY_MAX_INTERVAL 1000     // ms
+#endif
+#ifndef RETRY_INTERVAL_FACTOR
+#define RETRY_INTERVAL_FACTOR 2
+#endif
+#ifndef RETRY_MAX_ITER
+#define RETRY_MAX_ITER 1000
+#endif
+#endif /* FLUSH_ALLOC_RETRY */
+
 #include <upcxx.h>
 
+// retry remote allocation statement A with bounded exponential backoff
 #ifdef FLUSH_ALLOC_RETRY
-// retry remote allocation statement A with exponential backoff
 #ifdef FLUSH_WARN_ON_RETRY
 #define FLUSH_WARN_RETRY if ( iter > 0 ) \
   printf( "Warning: Thread %4i : ALLOC_WRAP required %li attempts\n", \
-	  MYTHREAD, iter );
+          MYTHREAD, iter );
 #else
 #define FLUSH_WARN_RETRY /* noop */
-#endif
+#endif /* FLUSH_WARN_RETRY */
 #define ALLOC_WRAP( A ) \
   do { \
     long iter = 0; \
@@ -31,14 +42,14 @@
     while ( ( A ).raw_ptr() == NULL && iter++ < RETRY_MAX_ITER ) { \
       usleep( 1000 * t ); \
       t = std::min( t * RETRY_INTERVAL_FACTOR, \
-		    (useconds_t) RETRY_MAX_INTERVAL ); \
+                    (useconds_t) RETRY_MAX_INTERVAL ); \
     } \
     FLUSH_WARN_RETRY \
   } while(0)
 #else
 // identity
 #define ALLOC_WRAP( A ) A
-#endif
+#endif /* FLUSH_ALLOC_RETRY */
 
 namespace cm
 {
