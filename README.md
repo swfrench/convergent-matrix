@@ -48,6 +48,26 @@ your program. Further, if you have compiled `ConvergentMatrix` with support for
 a progress thread, you must initialize MPI with thread support at the level of
 `MPI_THREAD_FUNNELED` or higher.
 
+## Key macros
+
+Enabling production features:
+* `-DENABLE_MPIIO_SUPPORT`: enable MPI-IO based `load()` and `save()` methods
+  for reading / writing matrix data
+* `ENABLE_PROGRESS_THREAD`: enable progress thread support (note: the progress
+  thread must still be turned on / off at run time; see the
+  `progress_thread_start` and `progress_thread_stop` methods)
+* `ENABLE_FLUSH_ALLOC_RETRY`: enable bounded exponential backoff for remote
+  allocations in `bin::flush` (minimum retry interval, maximum retry interval,
+  prolongation factor, and maximum retry count are configurable as well; see
+  `include/bin.hpp`)
+
+Enabling testing features:
+* `ENABLE_CONSISTENCY_CHECK`: replicate the full matrix on each participating
+  UPC++ process, applying updates to both the local replica and the distributed
+  matrix; global reduction across replicas in `ConvergentMatrix::commit` is
+  then used as a "ground truth" to assess correctness of distributed matrix
+  elements. Only works for matrices that fit in memory.
+
 ## References
 
 [1] Y. Zheng, et al., "UPC++: A PGAS Extension for C++," accepted to IPDPS 2014.

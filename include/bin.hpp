@@ -7,7 +7,7 @@
 #include <pthread.h>
 #endif
 
-#ifdef FLUSH_ALLOC_RETRY
+#ifdef ENABLE_FLUSH_ALLOC_RETRY
 #include <algorithm> // std::min
 #include <unistd.h>  // usleep
 #ifndef RETRY_MIN_INTERVAL
@@ -22,12 +22,12 @@
 #ifndef RETRY_MAX_ITER
 #define RETRY_MAX_ITER 1000
 #endif
-#endif /* FLUSH_ALLOC_RETRY */
+#endif /* ENABLE_FLUSH_ALLOC_RETRY */
 
 #include <upcxx.h>
 
 // retry remote allocation statement A with bounded exponential backoff
-#ifdef FLUSH_ALLOC_RETRY
+#ifdef ENABLE_FLUSH_ALLOC_RETRY
 #ifdef FLUSH_WARN_ON_RETRY
 #define FLUSH_WARN_RETRY if ( iter > 0 ) \
   printf( "Warning: Thread %4i : ALLOC_WRAP required %li attempts\n", \
@@ -49,7 +49,7 @@
 #else
 // identity
 #define ALLOC_WRAP( A ) A
-#endif /* FLUSH_ALLOC_RETRY */
+#endif /* ENABLE_FLUSH_ALLOC_RETRY */
 
 namespace cm
 {
