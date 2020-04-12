@@ -7,49 +7,7 @@
 #include <pthread.h>
 #endif
 
-#ifdef ENABLE_FLUSH_ALLOC_RETRY
-#include <algorithm> // std::min
-#include <unistd.h>  // usleep
-#ifndef RETRY_MIN_INTERVAL
-#define RETRY_MIN_INTERVAL 10       // ms
-#endif
-#ifndef RETRY_MAX_INTERVAL
-#define RETRY_MAX_INTERVAL 1000     // ms
-#endif
-#ifndef RETRY_INTERVAL_FACTOR
-#define RETRY_INTERVAL_FACTOR 2
-#endif
-#ifndef RETRY_MAX_ITER
-#define RETRY_MAX_ITER 1000
-#endif
-#endif /* ENABLE_FLUSH_ALLOC_RETRY */
-
-#include <upcxx.h>
-
-// retry remote allocation statement A with bounded exponential backoff
-#ifdef ENABLE_FLUSH_ALLOC_RETRY
-#ifdef FLUSH_WARN_ON_RETRY
-#define FLUSH_WARN_RETRY if ( iter > 0 ) \
-  printf( "Warning: Thread %4i : ALLOC_WRAP required %li attempts\n", \
-          MYTHREAD, iter );
-#else
-#define FLUSH_WARN_RETRY /* noop */
-#endif /* FLUSH_WARN_RETRY */
-#define ALLOC_WRAP( A ) \
-  do { \
-    long iter = 0; \
-    useconds_t t = RETRY_MIN_INTERVAL; \
-    while ( ( A ).raw_ptr() == NULL && iter++ < RETRY_MAX_ITER ) { \
-      usleep( 1000 * t ); \
-      t = std::min( t * RETRY_INTERVAL_FACTOR, \
-                    (useconds_t) RETRY_MAX_INTERVAL ); \
-    } \
-    FLUSH_WARN_RETRY \
-  } while(0)
-#else
-// identity
-#define ALLOC_WRAP( A ) A
-#endif /* ENABLE_FLUSH_ALLOC_RETRY */
+#include <upcxx/upcxx.hpp>
 
 namespace cm
 {
@@ -59,40 +17,23 @@ namespace cm
   /**
    * A task that performs remote updates (spawned by Bin<T>)
    * \param g_my_data Reference to local storage on the target
-   * \param g_ix Reference to update indexing (already transferred target)
-   * \param g_data Reference to update data (already transferred target)
+   * \param ix View to update indexing (already transferred target)
+   * \param data View to update data (already transferred target)
    */
   template <typename T>
   void
   update_task( long size,
-               upcxx::global_ptr<T>    g_my_data,
-               upcxx::global_ptr<long> g_ix,
-               upcxx::global_ptr<T>    g_data )
+               upcxx::global_ptr<T> g_my_data,
+               upcxx::view<long>    ix,
+               upcxx::view<T>       data )
   {
-    // local ptrs (for casts)
-    long *p_ix;
-    T *p_data, *p_my_data;
-
 #ifndef NOCHECK
-    assert( g_my_data.where() == MYTHREAD );
-    assert( g_ix.where()      == MYTHREAD );
-    assert( g_data.where()    == MYTHREAD );
+    assert( g_my_data.is_local() );
 #endif
-
-    // cast to local ptrs
-    p_ix = (long *) g_ix;
-    p_data = (T *) g_data;
-    p_my_data = (T *) g_my_data;
-
-    // update
+    T* my_data = g_my_data.local();
     for ( long k = 0; k < size; k++ )
-      p_my_data[p_ix[k]] += p_data[k];
-
-    // free local (but remotely allocated) storage
-    upcxx::deallocate( g_ix );
-    upcxx::deallocate( g_data );
-
-  } // end of update_task
+      my_data[ix[k]] += data[k];
+  }
 
 
   /**
@@ -214,42 +155,29 @@ namespace cm
     /**
      * "Flush" this bin by initiate remote async update using the current bin
      * contents.
-     * \param e upcxx::event pointer to which the async task will be registered
+     * \param p_op upcxx::promise<> pointer to which RPC remote operation
+     * completion will be registered
      */
     void
-    flush( upcxx::event *e )
+    flush( upcxx::promise<> *p_op )
     {
 #ifndef NOCHECK
       assert( _init );
 #endif
 
-      // global ptrs to local storage for async remote copy
-      upcxx::global_ptr<long> g_ix;
-      upcxx::global_ptr<T> g_data;
-
 #ifdef ENABLE_PROGRESS_THREAD
       pthread_mutex_lock( _tq_mutex );
 #endif
 
-      // allocate remote storage
-      ALLOC_WRAP( g_ix = upcxx::allocate<long>( _remote_tid, _ix.size() ) );
-#ifdef NOCHECK
-      assert( g_ix.raw_ptr() != NULL );
-#endif
-      ALLOC_WRAP( g_data = upcxx::allocate<T>( _remote_tid, _data.size() ) );
-#ifdef NOCHECK
-      assert( g_data.raw_ptr() != NULL );
-#endif
+      upcxx::promise<> p_src;  // Track source completion to render clear() safe
 
-      // copy to remote
-      upcxx::copy( (upcxx::global_ptr<long>) _ix.data(), g_ix, _ix.size() );
-      upcxx::copy( (upcxx::global_ptr<T>) _data.data(), g_data, _data.size() );
+      upcxx::rpc( _remote_tid,
+                  upcxx::source_cx::as_promise( p_src ) |
+                  upcxx::operation_cx::as_promise( *p_op ),
+                  update_task<T>, _data.size(), _g_remote_data,
+                  upcxx::make_view( _ix ), upcxx::make_view( _data ));
 
-      // spawn the remote update (responsible for deallocating g_ix, g_data)
-      upcxx::async( _remote_tid, e )( update_task<T>,
-                                      _data.size(),
-                                      _g_remote_data,
-                                      g_ix, g_data );
+      p_src.finalize().wait();
 
 #ifdef ENABLE_PROGRESS_THREAD
       pthread_mutex_unlock( _tq_mutex );
