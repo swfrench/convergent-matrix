@@ -17,10 +17,10 @@
  *
  * Once a series of updates have been applied, the matrix can be "committed"
  * (see \c ConvergentMatrix::commit()) and all bins are flushed.
- * Thereafter, each thread has its own PBLAS-compatible portion of the global
+ * Thereafter, each process has its own PBLAS-compatible portion of the global
  * matrix, consistent with the block-cyclic distribution defined by the
  * template parameters of \c ConvergentMatrix and assuming a row-major order of
- * threads in the process grid.
+ * processes in the process grid.
  *
  * \b Note: by default, no documentation is produced for internal data
  * structures and functions (e.g. \c update_task<T> and \c Bin<T>). To enable
@@ -33,20 +33,16 @@
 #include <cassert>
 #include <cstdio>
 #include <cstdlib>
-#include <ctime>
 
 #include <algorithm>
+#include <memory>
+#include <random>
 
-#include <upcxx.h>
+#include <upcxx/upcxx.hpp>
 
+// TODO: Consistency checks do not belong here. Finish moving to test code.
 #ifdef ENABLE_CONSISTENCY_CHECK
 #include <cmath>
-#endif
-
-#ifdef ENABLE_PROGRESS_THREAD
-#include <pthread.h>
-#include <unistd.h>  // usleep
-#define PROGRESS_HELPER_PAUSE_USEC 1000
 #endif
 
 #if (defined(ENABLE_CONSISTENCY_CHECK) || defined(ENABLE_MPIIO_SUPPORT))
@@ -67,7 +63,7 @@
 #define DEFAULT_BIN_FLUSH_THRESHOLD 10000
 #endif
 
-// default number of update() to trigger progress() and drain (local) task queue
+// default number of update() calls to trigger progress()
 #ifndef DEFAULT_PROGRESS_INTERVAL
 #define DEFAULT_PROGRESS_INTERVAL 1
 #endif
@@ -77,77 +73,6 @@
  */
 namespace cm {
 
-/// @cond INTERNAL_DOCS
-
-#ifdef ENABLE_PROGRESS_THREAD
-
-/**
- * Argument struct for the \c progress_helper() thread
- */
-struct progress_helper_args {
-  // lock for operations on the task queue
-  pthread_mutex_t *tq_mutex;
-
-  // copies of _max_dispatch_in/out for calls to upcxx::advance()
-  int max_dispatch_in, max_dispatch_out;
-
-  // boolean to signal the progres thread to exit
-  bool *progress_thread_stop;
-};
-
-/**
- * The action performed by the \c progress_helper() thread
- * \param args_ptr A \c void type pointer to a progress_helper_args structure
- */
-void *progress_helper(void *args_ptr) {
-  // re-cast args ptr
-  progress_helper_args *args = (progress_helper_args *)args_ptr;
-
-  // spin in upcxx::advance()
-  while (1) {
-    pthread_mutex_lock(args->tq_mutex);
-
-    // check the stop flag, possibly exiting
-    if (*args->progress_thread_stop) {
-      pthread_mutex_unlock(args->tq_mutex);
-      delete args;
-      return NULL;
-    }
-
-    // drain the task queue
-    upcxx::advance(args->max_dispatch_in, args->max_dispatch_out);
-
-    pthread_mutex_unlock(args->tq_mutex);
-
-    // pause briefly
-    usleep(PROGRESS_HELPER_PAUSE_USEC);
-  }
-}
-
-#endif  // ENABLE_PROGRESS_THREAD
-
-/**
- * Wrapper for \c std::rand() for use in \c std::random_shuffle() (called in
- * \c permute() below).
- */
-int rgen(int n) { return std::rand() % n; }
-
-/**
- * Apply a random permutation (in place) to the supplied array.
- * \param xs Array of type \c int
- * \param nx Length of array \c xs
- *
- * Seeds std::rand() in a manner that should be ok even if all threads hit
- * \c permute() at nearly the same time.
- */
-void permute(int *xs, int n) {
-  unsigned seed = (1 + MYTHREAD) * std::time(NULL);
-  std::srand(seed);
-  std::random_shuffle(xs, xs + n, rgen);
-}
-
-/// @endcond
-
 /**
  * Convergent matrix abstraction
  * \tparam T Matrix data type (e.g. float)
@@ -155,7 +80,7 @@ void permute(int *xs, int n) {
  * \tparam NPCOL Number of columns in the distributed process grid
  * \tparam MB Distribution blocking factor (leading dimension)
  * \tparam NB Distribution blocking factor (trailing dimension)
- * \tparam LLD Leading dimension of local storage (same on all threads)
+ * \tparam LLD Leading dimension of local storage (same on all processes)
  */
 template <typename T,              // matrix type
           long NPROW, long NPCOL,  // pblas process grid
@@ -171,14 +96,16 @@ class ConvergentMatrix {
   // update binning and application
   int _flush_counter;
   int _progress_interval;
-  int _max_dispatch_in, _max_dispatch_out;
   int _bin_flush_threshold;
   int _bin_flush_order[NPROW * NPCOL];
   Bin<T> _update_bins[NPROW * NPCOL];
-  upcxx::event _e_update;
+
+  // promise for this epoch.
+  std::unique_ptr<upcxx::promise<>> _curr_promise;
 
   // distributed storage arrays (local and remote)
   T *_local_ptr;
+  upcxx::global_ptr<T> _g_local_ptr;
   upcxx::global_ptr<T> _remote_ptrs[NPROW * NPCOL];
 
 #ifdef ENABLE_UPDATE_TIMING
@@ -191,90 +118,63 @@ class ConvergentMatrix {
   LocalMatrix<T> *_update_record;
 #endif
 
-  // background progress threads
-#ifdef ENABLE_PROGRESS_THREAD
-  bool _progress_thread_stop, _progress_thread_running;
-  pthread_t _progress_thread;
-  pthread_mutex_t _tq_mutex;
-#endif
-
   // *********************
   // ** private methods **
   // *********************
 
-  // initialize distributed storage arrays
   inline void init_arrays() {
-    // initialize shared_array of global_ptrs
-    upcxx::shared_array<upcxx::global_ptr<T> > shared_remote_ptrs;
-    shared_remote_ptrs.init(NPROW * NPCOL);
-
-    // allocate GASNet addressable storage
-    upcxx::global_ptr<T> _g_local_ptr =
-        upcxx::allocate<T>(MYTHREAD, LLD * _n_local);
-
-    // cast to local ptr and zero
-    _local_ptr = (T *)_g_local_ptr;
+    // allocate GASNet addressable storage and initialize.
+    _g_local_ptr = upcxx::new_array<T>(LLD * _n_local);
+    _local_ptr = _g_local_ptr.local();
     std::fill(_local_ptr, _local_ptr + LLD * _n_local, 0);
 
-    // exchange our global_ptr ref with the other upcxx threads
-    shared_remote_ptrs[MYTHREAD] = _g_local_ptr;
+    // temporary for exchanging pointers (note: ctor is a collective).
+    upcxx::dist_object<upcxx::global_ptr<T>> g_tmp(_g_local_ptr);
 
-    // sync (ensuring the shared_array has been populated)
+    // sync: ensure dist_object ctor complete on all processes.
     upcxx::barrier();
 
-    // copy remote pointers into _remote_ptrs cache, ensuring that future use
-    // of remote pointers does not incur a global_ref.get()
-    for (int tid = 0; tid < NPROW * NPCOL; tid++)
-      // implicit type conversion in cast from shared_remote_ptrs[tid] to
-      // global_ptr<T> (resolves remote global_ref<global_ptr<T> > reference
-      // returned by shared_array's operator[])
-      _remote_ptrs[tid] = shared_remote_ptrs[tid];
+    // copy remote pointers into _remote_ptrs, ensuring that future use of
+    // remote pointers does not incur a dist_object::fetch call.
+    upcxx::future<> fut_all = upcxx::make_future();
+    for (int rank = 0; rank < NPROW * NPCOL; ++rank) {
+      upcxx::future<> fut = g_tmp.fetch(rank).then(
+          [rank, this](upcxx::global_ptr<T> ptr) { _remote_ptrs[rank] = ptr; });
+      fut_all = upcxx::when_all(fut_all, fut);
+    }
+    fut_all.wait();
 
-    // sync again (ensuring all threads have cached the global_ptrs before
-    // shared_remote_ptrs goes out of scope)
+    // sync: ensure all processes have obtained remote pointers before g_tmp
+    // goes out of scope.
     upcxx::barrier();
   }
 
-  // initialize the update bins
   inline void init_bins() {
-    // set up the bin objects
-    for (int tid = 0; tid < NPROW * NPCOL; tid++)
-#ifdef ENABLE_PROGRESS_THREAD
-      _update_bins[tid].init(_remote_ptrs[tid], &_tq_mutex);
-#else
-      _update_bins[tid].init(_remote_ptrs[tid]);
-#endif
+    for (int rank = 0; rank < NPROW * NPCOL; rank++)
+      _update_bins[rank].init(_remote_ptrs[rank]);
 
-    // set up random flushing order
-    for (int tid = 0; tid < NPROW * NPCOL; tid++) _bin_flush_order[tid] = tid;
-    permute(_bin_flush_order, NPROW * NPCOL);
+    // randomize flush order to avoid synchronized sweeps across all
+    // participants.
+    for (int rank = 0; rank < NPROW * NPCOL; rank++)
+      _bin_flush_order[rank] = rank;
+    std::random_device rdev;
+    std::mt19937 rgen(rdev());
+    std::shuffle(_bin_flush_order, _bin_flush_order + (NPROW * NPCOL), rgen);
   }
 
-  // flush bins that are "full" (exceed the current threshold)
   inline void flush(int thresh = 0) {
-    // flush the bins
-    for (int b = 0; b < NPROW * NPCOL; b++) {
-      int tid = _bin_flush_order[b];
-      if (_update_bins[tid].size() > thresh)
-        _update_bins[tid].flush(&_e_update);
+    for (int bin = 0; bin < NPROW * NPCOL; bin++) {
+      int rank = _bin_flush_order[bin];
+      if (_update_bins[rank].size() > thresh)
+        _update_bins[rank].flush(_curr_promise.get());
     }
 
-#ifdef ENABLE_PROGRESS_THREAD
-    if (!_progress_thread_running) {
-#endif
-      // increment update counter
-      _flush_counter += 1;
-
-      // check whether we should pause to flush the task queue
-      if (thresh == 0 || _flush_counter == _progress_interval) {
-        // drain the task queue
-        upcxx::advance(_max_dispatch_in, _max_dispatch_out);
-        // reset the counter
-        _flush_counter = 0;
-      }
-#ifdef ENABLE_PROGRESS_THREAD
+    // note: every _progress_interval calls to flush(), upcxx::progress will be
+    // called, unless thresh is 0 (in which case we always call progress).
+    if (++_flush_counter == _progress_interval) {
+      upcxx::progress();
+      _flush_counter = 0;
     }
-#endif
   }
 
   // determine lower bound on local storage for a given block-cyclic
@@ -296,50 +196,6 @@ class ConvergentMatrix {
       m_local += m % mb;  // process ip _may_ receive a partial block
     return m_local;
   }
-
-#ifdef ENABLE_PROGRESS_THREAD
-
-  // begin progress thread execution (executes progress_helper())
-  void progress_thread_start() {
-    pthread_attr_t th_attr;
-    progress_helper_args *args;
-
-    // erroneous to call while thread is running
-    assert(!_progress_thread_running);
-
-    // set up progress helper argument struct
-    args = new progress_helper_args;
-    args->tq_mutex = &_tq_mutex;
-    args->max_dispatch_in = _max_dispatch_in;
-    args->max_dispatch_out = _max_dispatch_out;
-    args->progress_thread_stop = &_progress_thread_stop;
-
-    // set thread as joinable
-    pthread_attr_init(&th_attr);
-    pthread_attr_setdetachstate(&th_attr, PTHREAD_CREATE_JOINABLE);
-
-    // turn off stop flag
-    _progress_thread_stop = false;
-
-    // start the thread
-    assert(pthread_create(&_progress_thread, &th_attr, progress_helper,
-                          (void *)args) == 0);
-    _progress_thread_running = true;
-  }
-
-  // signal to stop the progress thread and wait on it
-  void progress_thread_stop() {
-    // set the stop flag
-    pthread_mutex_lock(&_tq_mutex);
-    _progress_thread_stop = true;
-    pthread_mutex_unlock(&_tq_mutex);
-
-    // wait for thread to stop
-    assert(pthread_join(_progress_thread, NULL) == 0);
-    _progress_thread_running = false;
-  }
-
-#endif  // ENABLE_PROGRESS_THREAD
 
 #ifdef ENABLE_MPI_HELPERS
 
@@ -364,28 +220,28 @@ class ConvergentMatrix {
   inline void consistency_check(T *updates) {
     long ncheck = 0;
     int mpi_init;
-#ifdef ENABLE_PROGRESS_THREAD
+#ifdef THREAD_FUNNELED_REQUIRED
     int mpi_thread;
-#endif  // ENABLE_PROGRESS_THREAD
+#endif  // THREAD_FUNNELED_REQUIRED
     const T rtol = 1e-8;
     T *summed_updates;
 
     // make sure MPI is already initialized
     assert(MPI_Initialized(&mpi_init) == MPI_SUCCESS);
     assert(mpi_init);
-#ifdef ENABLE_PROGRESS_THREAD
+#ifdef THREAD_FUNNELED_REQUIRED
     // make sure MPI has sufficient thread support
     assert(MPI_Query_thread(&mpi_thread) == MPI_SUCCESS);
     assert(mpi_thread >= MPI_THREAD_FUNNELED);
-#endif  // ENABLE_PROGRESS_THREAD
+#endif  // THREAD_FUNNELED_REQUIRED
 
-    // sum the recorded updates across threads
+    // sum the recorded updates across processes
     summed_updates = new T[_m * _n];
     sum_updates(updates, summed_updates);
 
     // ensure the locally-owned data is consistent with the record
     printf("[%s] Thread %4i : Consistency check start ...\n", __func__,
-           MYTHREAD);
+           upcxx::rank_me());
     for (long j = 0; j < _n; j++)
       if ((j / NB) % NPCOL == _mycol) {
         long off_j = LLD * ((j / (NB * NPCOL)) * NB + j % NB);
@@ -406,7 +262,7 @@ class ConvergentMatrix {
     printf(
         "[%s] Thread %4i : Consistency check PASSED for %li local"
         " entries\n",
-        __func__, MYTHREAD, ncheck);
+        __func__, upcxx::rank_me(), ncheck);
   }
 
 #endif  // ENABLE_CONSISTENCY_CHECK
@@ -432,11 +288,11 @@ class ConvergentMatrix {
     assert(_n > 0);
 
     // check on block-cyclic distribution
-    assert(NPCOL * NPROW == THREADS);
+    assert(NPCOL * NPROW == upcxx::rank_n());
 
     // setup block-cyclic distribution
-    _myrow = MYTHREAD / NPROW;
-    _mycol = MYTHREAD % NPCOL;
+    _myrow = upcxx::rank_me() / NPROW;
+    _mycol = upcxx::rank_me() % NPCOL;
 
     // calculate minimum req'd local dimensions
     _m_local = roc(_m, NPROW, _myrow, MB);
@@ -449,27 +305,20 @@ class ConvergentMatrix {
     // check minimum local leading dimension compatible with LLD
     assert(_m_local <= LLD);
 
-    // estimate upper bounds on the numbers of incoming and outgoing tasks to
-    // be dispatched per round of upcxx::advance()
-    _max_dispatch_out = NPROW * NPCOL;  // hitting all target bins
-    _max_dispatch_in = _max_dispatch_out * _max_dispatch_out;  // all-to-all
-
     // initialize distributed storage
     init_arrays();
 
     // initialize update bins
     init_bins();
 
+    // initialize the promise that will track remote updates during this epoch
+    // (i.e. until the next call to commit()).
+    _curr_promise = std::make_unique<upcxx::promise<>>();
+
     // consistency check is off by default
 #ifdef ENABLE_CONSISTENCY_CHECK
     _consistency_mode = false;
-    _update_record = NULL;
-#endif
-
-    // initialize the task-queue mutex and progress thread state flag
-#ifdef ENABLE_PROGRESS_THREAD
-    _progress_thread_running = false;
-    pthread_mutex_init(&_tq_mutex, NULL);
+    _update_record = nullptr;
 #endif
 
 #ifdef ENABLE_UPDATE_TIMING
@@ -482,7 +331,7 @@ class ConvergentMatrix {
    *
    * On destruction, will:
    * - Perform a final \c commit() (with consistency checks disabled),
-   *   clearing remaining asynchronous tasks from the queue
+   *   clearing remaining injected updates from the queue
    * - Free storage associated with update bins
    * - Free storage associated with the distributed matrix
    */
@@ -494,7 +343,7 @@ class ConvergentMatrix {
     commit();
 
     // delete the GASNet-addressable local storage
-    upcxx::deallocate<T>(upcxx::global_ptr<T>(_local_ptr));
+    upcxx::delete_array(_g_local_ptr);
   }
 
   /**
@@ -524,7 +373,7 @@ class ConvergentMatrix {
    * Reset the distributed matrix (implicit barrier)
    *
    * Calls \c commit() (with consistency checks disabled), clearing remaining
-   * asynchronous tasks from the queue, and then zeros the associated local
+   * injected updates from the queue, and then zeros the associated local
    * storage.
    *
    * \b Note: consistency checks must be manually re-enabled after calling
@@ -561,17 +410,15 @@ class ConvergentMatrix {
 
   /**
    * Get the progress interval, the number of bulk-update bin-flushes before
-   * draining the local task queue.
-   * Note that if there is a progress thread running, this drain operation is
-   * not performed.
+   * calling into upcxx::progress to ensure completion of remotely injected
+   * updates.
    */
   inline int progress_interval() const { return _progress_interval; }
 
   /**
    * Set the progress interval, the number of bulk-update bin-flushes before
-   * draining the local task queue.
-   * Note that if there is a progress thread running, this drain operation is
-   * not performed.
+   * calling into upcxx::progress to ensure completion of remotely injected
+   * updates.
    * \param interval The progress interval
    */
   inline void progress_interval(int interval) { _progress_interval = interval; }
@@ -587,12 +434,12 @@ class ConvergentMatrix {
   inline long n() const { return _n; }
 
   /**
-   * Process grid row index of this thread
+   * Process grid row index of this process
    */
   inline long pgrid_row() const { return _myrow; }
 
   /**
-   * Process grid column index of this thread
+   * Process grid column index of this process
    */
   inline long pgrid_col() const { return _mycol; }
 
@@ -613,13 +460,11 @@ class ConvergentMatrix {
    * \param jx Trailing dimension index
    */
   inline T operator()(long ix, long jx) {
-    // infer thread id and linear index
-    int tid = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
+    // infer process rank and linear index
+    int rank = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
     long ij = LLD * ((jx / (NB * NPCOL)) * NB + jx % NB) +
               (ix / (MB * NPROW)) * MB + ix % MB;
-    // operator[ij] on global_ptr[tid] returns a global_ref to index ij on
-    // target; implicit conversion (resolution) when returning type T
-    return _remote_ptrs[tid][ij];
+    return upcxx::rget(_remote_ptrs[rank] + ij).wait();
   }
 
   /**
@@ -629,16 +474,17 @@ class ConvergentMatrix {
    * \param jx Maps slice into distributed matrix (trailing dimension)
    */
   void update(LocalMatrix<T> *Mat, long *ix, long *jx) {
-    // bin the local update
     for (long j = 0; j < Mat->n(); j++) {
       int pcol = (jx[j] / NB) % NPCOL;
       long off_j = LLD * ((jx[j] / (NB * NPCOL)) * NB + jx[j] % NB);
       for (long i = 0; i < Mat->m(); i++) {
-        int tid = pcol + NPCOL * ((ix[i] / MB) % NPROW);
+        int rank = pcol + NPCOL * ((ix[i] / MB) % NPROW);
         long ij = off_j + (ix[i] / (MB * NPROW)) * MB + ix[i] % MB;
-        _update_bins[tid].append((*Mat)(i, j), ij);
+        _update_bins[rank].append((*Mat)(i, j), ij);
       }
     }
+
+    flush(_bin_flush_threshold);
 
 #ifdef ENABLE_CONSISTENCY_CHECK
     if (_consistency_mode)
@@ -646,9 +492,6 @@ class ConvergentMatrix {
         for (long i = 0; i < Mat->m(); i++)
           (*_update_record)(ix[i], jx[j]) += (*Mat)(i, j);
 #endif
-
-    // possibly flush bins
-    flush(_bin_flush_threshold);
   }
 
   /**
@@ -658,18 +501,16 @@ class ConvergentMatrix {
    * \param jx Global index in distributed matrix (trailing dimension)
    */
   inline void update(T elem, long ix, long jx) {
-    // bin the update
-    int tid = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
+    int rank = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
     long ij = LLD * ((jx / (NB * NPCOL)) * NB + jx % NB) +
               (ix / (MB * NPROW)) * MB + ix % MB;
-    _update_bins[tid].append(elem, ij);
+    _update_bins[rank].append(elem, ij);
+
+    flush(_bin_flush_threshold);
 
 #ifdef ENABLE_CONSISTENCY_CHECK
     if (_consistency_mode) (*_update_record)(ix, jx) += elem;
 #endif
-
-    // possibly flush bins
-    flush(_bin_flush_threshold);
   }
 
   /**
@@ -695,9 +536,9 @@ class ConvergentMatrix {
       long off_j = LLD * ((ix[j] / (NB * NPCOL)) * NB + ix[j] % NB);
       for (long i = 0; i < Mat->m(); i++)
         if (ix[i] <= ix[j]) {
-          int tid = pcol + NPCOL * ((ix[i] / MB) % NPROW);
+          int rank = pcol + NPCOL * ((ix[i] / MB) % NPROW);
           long ij = off_j + (ix[i] / (MB * NPROW)) * MB + ix[i] % MB;
-          _update_bins[tid].append((*Mat)(i, j), ij);
+          _update_bins[rank].append((*Mat)(i, j), ij);
         }
     }
 #ifdef ENABLE_UPDATE_TIMING
@@ -705,14 +546,6 @@ class ConvergentMatrix {
     printf("[%s] %f binning time: %f s\n", __func__, wt1 - _wt_init, wt1 - wt0);
 #endif
 
-#ifdef ENABLE_CONSISTENCY_CHECK
-    if (_consistency_mode)
-      for (long j = 0; j < Mat->n(); j++)
-        for (long i = 0; i < Mat->m(); i++)
-          if (ix[i] <= ix[j]) (*_update_record)(ix[i], ix[j]) += (*Mat)(i, j);
-#endif
-
-            // possibly flush bins
 #ifdef ENABLE_UPDATE_TIMING
     wt0 = omp_get_wtime();
 #endif
@@ -720,6 +553,13 @@ class ConvergentMatrix {
 #ifdef ENABLE_UPDATE_TIMING
     wt1 = omp_get_wtime();
     printf("[%s] %f flush time: %f s\n", __func__, wt1 - _wt_init, wt1 - wt0);
+#endif
+
+#ifdef ENABLE_CONSISTENCY_CHECK
+    if (_consistency_mode)
+      for (long j = 0; j < Mat->n(); j++)
+        for (long i = 0; i < Mat->m(); i++)
+          if (ix[i] <= ix[j]) (*_update_record)(ix[i], ix[j]) += (*Mat)(i, j);
 #endif
   }
 
@@ -732,9 +572,8 @@ class ConvergentMatrix {
    * side.
    *
    * \b Note: There is also no implicit \c commit() before the fill updates
-   * start.
-   * Thus, always call \c commit() _before_ calling \c fill_lower(), and
-   * again when you need to ensure the full updates have been applied.
+   * start. Thus, always call \c commit() _before_ calling \c fill_lower(),
+   * and again when you need to ensure the full updates have been applied.
    */
   void fill_lower() {
     for (long j = 0; j < _n_local; j++) {
@@ -743,16 +582,15 @@ class ConvergentMatrix {
         long jx = (i / MB) * (NPROW * MB) + _myrow * MB + i % MB;
         // use _transposed_ global indices to fill in the strict lower part
         if (ix > jx) {
-          int tid = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
+          int rank = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
           long ij = LLD * ((jx / (NB * NPCOL)) * NB + jx % NB) +
                     (ix / (MB * NPROW)) * MB + ix % MB;
-          _update_bins[tid].append(_local_ptr[i + j * LLD], ij);
+          _update_bins[rank].append(_local_ptr[i + j * LLD], ij);
 
 #ifdef ENABLE_CONSISTENCY_CHECK
           if (_consistency_mode)
             (*_update_record)(ix, jx) += _local_ptr[i + j * LLD];
 #endif
-
         } else {
           break;  // nothing left to do in this column ...
         }
@@ -764,35 +602,32 @@ class ConvergentMatrix {
   }
 
   /**
-   * Drain all update bins and wait on associated async tasks (implicit
-   * barrier). If the consistency check is turned on, it will run after all
-   * updates have been applied.
-   *
-   * \b Note: will stop the progress thread if it is running (see \c
-   * use_progress_thread()).
+   * Drain all update bins and wait on associated update RPCs. If the
+   * consistency check is turned on, it will run after all updates have been
+   * applied.
    */
   inline void commit() {
-    // stop the progress thread, if it has started
-#ifdef ENABLE_PROGRESS_THREAD
-    if (_progress_thread_running) progress_thread_stop();
-#endif
-
     // synchronize
     upcxx::barrier();
 
-    // flush all non-empty bins (local task queue will be emptied)
+    // flush all non-empty bins (i.e. bin size threshold is zero).
     flush();
 
-    // sync again (all locally-queued remote tasks have been dispatched)
+    // sync: ensure all remote update RPCs have been dispatched.
     upcxx::barrier();
 
-    // catch the last wave of tasks, if any
-    upcxx::advance(_max_dispatch_in, _max_dispatch_out);
+    // progress any newly injected RPCs.
+    // TODO: We may need a stronger guarantee of quiescence here.
+    upcxx::progress();
 
-    // wait on remote tasks
-    _e_update.wait();
+    // wait on dispatched update RPC completion and reset the promise for our
+    // next pass.
+    _curr_promise->finalize().wait();
+    _curr_promise = std::make_unique<upcxx::promise<>>();
 
-    // done, sync on return
+    // wait for all processes to observe completion of dispatched updates (note:
+    // barrier() internally makes user-level progress, and will thus execute
+    // remotely injected RPCs).
     upcxx::barrier();
 
     // if enabled, the consistency check should only occur after commit
@@ -802,27 +637,6 @@ class ConvergentMatrix {
   }
 
   // Optional functionality enabled at compile time ...
-
-#ifdef ENABLE_PROGRESS_THREAD
-
-  /**
-   * Starts a progress thread for draining the task queue in the background.
-   *
-   * \b Importantly, the progress thread will only execute until the next
-   * call to \c commit().
-   * Thus, \c use_progress_thread() must be called for each commit epoch
-   * separately if it is desired.
-   * Further, the use of \c upcxx functions that touch the task queue during
-   * progress thread execution is not advised and the resulting behavior is
-   * \b undefined.
-   *
-   * \b Note: Requires compilation with \c ENABLE_PROGRESS_THREAD.
-   */
-  inline void use_progress_thread() {
-    if (!_progress_thread_running) progress_thread_start();
-  }
-
-#endif  // ENABLE_PROGRESS_THREAD
 
 #ifdef ENABLE_CONSISTENCY_CHECK
 
@@ -837,7 +651,7 @@ class ConvergentMatrix {
    */
   inline void consistency_check_on() {
     _consistency_mode = true;
-    if (_update_record == NULL) _update_record = new LocalMatrix<T>(_m, _n);
+    if (_update_record == nullptr) _update_record = new LocalMatrix<T>(_m, _n);
     (*_update_record) = (T)0;
   }
 
@@ -848,7 +662,7 @@ class ConvergentMatrix {
    */
   inline void consistency_check_off() {
     _consistency_mode = false;
-    if (_update_record != NULL) delete _update_record;
+    if (_update_record != nullptr) delete _update_record;
   }
 
 #endif  // ENABLE_CONSISTENCY_CHECK
@@ -865,15 +679,15 @@ class ConvergentMatrix {
    * \b Note: Requires compilation with \c ENABLE_MPIIO_SUPPORT and MPI must
    * already have been initialized by the user.
    *
-   * \b Note: If compiled with \c ENABLE_PROGRESS_THREAD, this routine will
+   * \b Note: If compiled with \c THREAD_FUNNELED_REQUIRED, this routine will
    * require MPI to have been initialized with a thread support level of at
    * least \c MPI_THREAD_FUNNELED.
    */
   void save(const char *fname) {
     int mpi_init, mpi_rank, distmat_size, write_count;
-#ifdef ENABLE_PROGRESS_THREAD
+#ifdef THREAD_FUNNELED_REQUIRED
     int mpi_thread;
-#endif  // ENABLE_PROGRESS_THREAD
+#endif  // THREAD_FUNNELED_REQUIRED
     double wt_io, wt_io_max;
     MPI_Status status;
     MPI_Datatype distmat;
@@ -885,11 +699,11 @@ class ConvergentMatrix {
     // make sure MPI is already initialized
     assert(MPI_Initialized(&mpi_init) == MPI_SUCCESS);
     assert(mpi_init);
-#ifdef ENABLE_PROGRESS_THREAD
+#ifdef THREAD_FUNNELED_REQUIRED
     // make sure MPI has sufficient thread support
     assert(MPI_Query_thread(&mpi_thread) == MPI_SUCCESS);
     assert(mpi_thread >= MPI_THREAD_FUNNELED);
-#endif  // ENABLE_PROGRESS_THREAD
+#endif  // THREAD_FUNNELED_REQUIRED
 
     // check process grid ordering
     MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
@@ -960,15 +774,15 @@ class ConvergentMatrix {
    * \b Note: Requires compilation with \c ENABLE_MPIIO_SUPPORT and MPI must
    * already have been initialized by the user.
    *
-   * \b Note: If compiled with \c ENABLE_PROGRESS_THREAD, this routine will
+   * \b Note: If compiled with \c THREAD_FUNNELED_REQUIRED, this routine will
    * require MPI to have been initialized with a thread support level of at
    * least \c MPI_THREAD_FUNNELED.
    */
   void load(const char *fname) {
     int mpi_init, mpi_rank, distmat_size, read_count;
-#ifdef ENABLE_PROGRESS_THREAD
+#ifdef THREAD_FUNNELED_REQUIRED
     int mpi_thread;
-#endif  // ENABLE_PROGRESS_THREAD
+#endif  // THREAD_FUNNELED_REQUIRED
     double wt_io, wt_io_max;
     MPI_Status status;
     MPI_Datatype distmat;
@@ -980,11 +794,11 @@ class ConvergentMatrix {
     // make sure MPI is already initialized
     assert(MPI_Initialized(&mpi_init) == MPI_SUCCESS);
     assert(mpi_init);
-#ifdef ENABLE_PROGRESS_THREAD
+#ifdef THREAD_FUNNELED_REQUIRED
     // make sure MPI has sufficient thread support
     assert(MPI_Query_thread(&mpi_thread) == MPI_SUCCESS);
     assert(mpi_thread >= MPI_THREAD_FUNNELED);
-#endif  // ENABLE_PROGRESS_THREAD
+#endif  // THREAD_FUNNELED_REQUIRED
 
     // check process grid ordering
     MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);

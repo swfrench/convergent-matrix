@@ -6,14 +6,14 @@ RUN = $(UPCXXPATH)/bin/upcxx-run
 
 UPCXXFLAGS = -codemode=O3 -network=smp
 
-CXXFLAGS = $(UPCXXFLAGS) -I..
+CXXFLAGS = $(UPCXXFLAGS) -std=c++14 -I..
 
 LDFLAGS = $(UPCXXFLAGS)
 
 O = obj
 B = bin
 
-all : bin_test
+all : bin_test cm_test
 
 $O :
 	@mkdir -p $O
@@ -21,15 +21,22 @@ $O :
 $B :
 	@mkdir -p $B
 
-$O/%.o : %.cpp $O
+$O/%.o : %.cpp | $O
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
-$B/bin_test : $O/bin_test.o $B
+$B/bin_test : $O/bin_test.o | $B
 	$(CXX) $(LDFLAGS) $< -o $@
 
 .PHONY : bin_test
 bin_test : $B/bin_test
 	@$(RUN) -n 4 $B/bin_test && echo OK
+
+$B/cm_test : $O/cm_test.o | $B
+	$(CXX) $(LDFLAGS) $< -o $@
+
+.PHONY : cm_test
+cm_test : $B/cm_test
+	@$(RUN) -n 4 $B/cm_test && echo OK
 
 .PHONY : clean
 clean :
