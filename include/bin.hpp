@@ -3,10 +3,6 @@
 #include <cassert>
 #include <vector>
 
-#ifdef ENABLE_PROGRESS_THREAD
-#include <pthread.h>
-#endif
-
 #include <upcxx/upcxx.hpp>
 
 namespace cm {
@@ -43,9 +39,6 @@ class Bin {
   upcxx::global_ptr<T> _g_remote_data;  // global_ptr _local_ to target
   std::vector<long> _ix;                // linear indexing for target
   std::vector<T> _data;                 // update data for target
-#ifdef ENABLE_PROGRESS_THREAD
-  pthread_mutex_t *_tq_mutex;  // mutex protecting task-queue ops
-#endif
 
   inline void clear() {
     _ix.clear();
@@ -58,36 +51,6 @@ class Bin {
    */
   Bin() : _init(false) {}
 
-#ifdef ENABLE_PROGRESS_THREAD
-  /**
-   * Create the Bin object associated with a given target
-   * \param g_remote_data global_ptr<T> reference to the target-local storage
-   * \param tq_mutex pthread mutex protecting the task queue and associated
-   * GASNet operations
-   */
-  Bin(upcxx::global_ptr<T> g_remote_data, pthread_mutex_t *tq_mutex)
-      : _init(true),
-        _remote_tid(g_remote_data.where()),
-        _g_remote_data(g_remote_data),
-        _tq_mutex(tq_mutex) {}
-
-  /**
-   * Initialize the previously empty Bin object for a given target
-   * \param g_remote_data global_ptr<T> reference to the target-local storage
-   * \param tq_mutex pthread mutex protecting the task queue and associated
-   * GASNet operations
-   *
-   * \b Note: It is erroneous to call this on a previously initialized Bin.
-   */
-  inline void init(upcxx::global_ptr<T> g_remote_data,
-                   pthread_mutex_t *tq_mutex) {
-    assert(!_init);
-    _remote_tid = g_remote_data.where();
-    _g_remote_data = g_remote_data;
-    _tq_mutex = tq_mutex;
-    _init = true;
-  }
-#else
   /**
    * Create the Bin object associated with a given target
    * \param g_remote_data global_ptr<T> reference to the target-local storage
@@ -109,7 +72,6 @@ class Bin {
     _g_remote_data = g_remote_data;
     _init = true;
   }
-#endif
 
   /**
    * Current size of the bin (number of update elems not yet applied)
@@ -137,10 +99,6 @@ class Bin {
     assert(_init);
 #endif
 
-#ifdef ENABLE_PROGRESS_THREAD
-    pthread_mutex_lock(_tq_mutex);
-#endif
-
     upcxx::promise<> p_src;  // Track source completion to render clear() safe
 
     upcxx::rpc(_remote_tid,
@@ -149,13 +107,11 @@ class Bin {
                update_task<T>, _data.size(), _g_remote_data,
                upcxx::make_view(_ix), upcxx::make_view(_data));
 
+    // NOTE: upcxx::future::wait invokes user-level progress, so remote updates
+    // _may_ execute here (if the caller holds the master persona).
     p_src.finalize().wait();
 
-#ifdef ENABLE_PROGRESS_THREAD
-    pthread_mutex_unlock(_tq_mutex);
-#endif
-
-    // clear internal (vector) storage
+    // It is now safe to call clear().
     clear();
   }
 
