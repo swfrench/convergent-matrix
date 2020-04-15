@@ -1,4 +1,3 @@
-#include <cassert>
 #include <cstdlib>
 #include <iostream>
 #include <random>
@@ -8,16 +7,6 @@
 #include "include/convergent_matrix.hpp"
 #include "include/local_matrix.hpp"
 
-#define ASSERT(want, got, msg)                                                \
-  do {                                                                        \
-    if ((got) != (want)) {                                                    \
-      std::cerr << __FILE__ << ":" << __LINE__ << "] " << msg                 \
-                << " : expected equality want=" << (want) << " got=" << (got) \
-                << std::endl;                                                 \
-      exit(1);                                                                \
-    }                                                                         \
-  } while (false)
-
 #define MB 64
 #define NB 64
 #define NPROW 2
@@ -25,7 +14,10 @@
 
 namespace test {
 
-// TODO: Better coverage of multi-epoch updates (i.e. multiple calls to commit).
+// TODO: Add coverage of:
+// - multi-epoch updates (i.e. multiple calls to commit)
+// - slice-based updates (rather than single-element)
+// - symmetric case (i.e. bulk lower triangular fill)
 
 void randomElementUpdates() {
   constexpr int niter = 1000;
@@ -50,22 +42,21 @@ void randomElementUpdates() {
 
   // perform consistency check
   cm::LocalMatrix<int> sum(2000, 1000);
-  upcxx::reduce_one(local_mirror.data(), sum.data(), sum.m() * sum.n(),
-                    upcxx::op_fast_add, 0)
+  upcxx::reduce_all(local_mirror.data(), sum.data(), sum.m() * sum.n(),
+                    upcxx::op_fast_add)
       .wait();
-  if (upcxx::rank_me() == 0) {
-    for (long j = 0; j < sum.n(); ++j) {
-      for (long i = 0; i < sum.m(); ++i) {
-        ASSERT(sum(i, j), dist_mat(i, j), "Blah");
-      }
-    }
+  auto success =
+      dist_mat.verify_local_elements([&sum](int val, long i, long j) {
+        if (sum(i, j) != val) return true;
+        std::cerr << __FILE__ << ":" << __LINE__ << " @ " << upcxx::rank_me()
+                  << "] verification failed at (" << i << ", " << j
+                  << ") want: " << sum(i, j) << " got: " << val << std::endl;
+        return false;
+      });
+  if (!success) {
+    exit(1);
   }
-
-  // note: ConvergentMatrix dtor contains an implicit barrier (none needed
-  // here).
 }
-
-// TODO: Add similarly complex slice-based update.
 
 }  // namespace test
 

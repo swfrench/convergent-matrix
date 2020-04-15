@@ -35,15 +35,11 @@
 #include <cstdlib>
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 #include <random>
 
 #include <upcxx/upcxx.hpp>
-
-// TODO: Consistency checks do not belong here. Finish moving to test code.
-#ifdef ENABLE_CONSISTENCY_CHECK
-#include <cmath>
-#endif
 
 #if (defined(ENABLE_CONSISTENCY_CHECK) || defined(ENABLE_MPIIO_SUPPORT))
 #include <mpi.h>
@@ -110,12 +106,6 @@ class ConvergentMatrix {
 
 #ifdef ENABLE_UPDATE_TIMING
   double _wt_init;
-#endif
-
-  // replicated consistency checks
-#ifdef ENABLE_CONSISTENCY_CHECK
-  bool _consistency_mode;
-  LocalMatrix<T> *_update_record;
 #endif
 
   // *********************
@@ -209,64 +199,6 @@ class ConvergentMatrix {
 
 #endif  // ENABLE_MPI_HELPERS
 
-#ifdef ENABLE_CONSISTENCY_CHECK
-
-  inline void sum_updates(T *updates, T *summed_updates) {
-    MPI_Datatype base_dtype = get_mpi_base_type();
-    MPI_Allreduce(updates, summed_updates, _m * _n, base_dtype, MPI_SUM,
-                  MPI_COMM_WORLD);
-  }
-
-  inline void consistency_check(T *updates) {
-    long ncheck = 0;
-    int mpi_init;
-#ifdef THREAD_FUNNELED_REQUIRED
-    int mpi_thread;
-#endif  // THREAD_FUNNELED_REQUIRED
-    const T rtol = 1e-8;
-    T *summed_updates;
-
-    // make sure MPI is already initialized
-    assert(MPI_Initialized(&mpi_init) == MPI_SUCCESS);
-    assert(mpi_init);
-#ifdef THREAD_FUNNELED_REQUIRED
-    // make sure MPI has sufficient thread support
-    assert(MPI_Query_thread(&mpi_thread) == MPI_SUCCESS);
-    assert(mpi_thread >= MPI_THREAD_FUNNELED);
-#endif  // THREAD_FUNNELED_REQUIRED
-
-    // sum the recorded updates across processes
-    summed_updates = new T[_m * _n];
-    sum_updates(updates, summed_updates);
-
-    // ensure the locally-owned data is consistent with the record
-    printf("[%s] Thread %4i : Consistency check start ...\n", __func__,
-           upcxx::rank_me());
-    for (long j = 0; j < _n; j++)
-      if ((j / NB) % NPCOL == _mycol) {
-        long off_j = LLD * ((j / (NB * NPCOL)) * NB + j % NB);
-        for (long i = 0; i < _m; i++)
-          if ((i / MB) % NPROW == _myrow) {
-            long ij = off_j + (i / (MB * NPROW)) * MB + i % MB;
-            T rres;
-            if (summed_updates[i + _m * j] == 0.0)
-              rres = 0.0;
-            else
-              rres = std::abs((summed_updates[i + _m * j] - _local_ptr[ij]) /
-                              summed_updates[i + _m * j]);
-            assert(rres < rtol);
-            ncheck += 1;
-          }
-      }
-    delete[] summed_updates;
-    printf(
-        "[%s] Thread %4i : Consistency check PASSED for %li local"
-        " entries\n",
-        __func__, upcxx::rank_me(), ncheck);
-  }
-
-#endif  // ENABLE_CONSISTENCY_CHECK
-
  public:
   // ********************
   // ** public methods **
@@ -315,12 +247,6 @@ class ConvergentMatrix {
     // (i.e. until the next call to commit()).
     _curr_promise = std::make_unique<upcxx::promise<>>();
 
-    // consistency check is off by default
-#ifdef ENABLE_CONSISTENCY_CHECK
-    _consistency_mode = false;
-    _update_record = nullptr;
-#endif
-
 #ifdef ENABLE_UPDATE_TIMING
     _wt_init = omp_get_wtime();
 #endif
@@ -330,16 +256,12 @@ class ConvergentMatrix {
    * Destructor for the \c ConvergentMatrix distributed matrix abstraction.
    *
    * On destruction, will:
-   * - Perform a final \c commit() (with consistency checks disabled),
-   *   clearing remaining injected updates from the queue
+   * - Perform a final \c commit(), clearing remaining injected updates from
+   *   the queue
    * - Free storage associated with update bins
    * - Free storage associated with the distributed matrix
    */
   ~ConvergentMatrix() {
-    // run commit() one last time _without_ consistency checks
-#ifdef ENABLE_CONSISTENCY_CHECK
-    consistency_check_off();
-#endif
     commit();
 
     // delete the GASNet-addressable local storage
@@ -372,19 +294,10 @@ class ConvergentMatrix {
   /**
    * Reset the distributed matrix (implicit barrier)
    *
-   * Calls \c commit() (with consistency checks disabled), clearing remaining
-   * injected updates from the queue, and then zeros the associated local
-   * storage.
-   *
-   * \b Note: consistency checks must be manually re-enabled after calling
-   * \c reset() (see \c consistency_check_on()).
+   * Calls \c commit(), clearing remaining injected updates from the queue, and
+   * then zeros the associated local storage.
    */
   inline void reset() {
-    // disable consistency checks
-#ifdef ENABLE_CONSISTENCY_CHECK
-    consistency_check_off();
-#endif
-
     // commit to complete any outstanding updates
     commit();
 
@@ -485,13 +398,6 @@ class ConvergentMatrix {
     }
 
     flush(_bin_flush_threshold);
-
-#ifdef ENABLE_CONSISTENCY_CHECK
-    if (_consistency_mode)
-      for (long j = 0; j < Mat->n(); j++)
-        for (long i = 0; i < Mat->m(); i++)
-          (*_update_record)(ix[i], jx[j]) += (*Mat)(i, j);
-#endif
   }
 
   /**
@@ -507,10 +413,6 @@ class ConvergentMatrix {
     _update_bins[rank].append(elem, ij);
 
     flush(_bin_flush_threshold);
-
-#ifdef ENABLE_CONSISTENCY_CHECK
-    if (_consistency_mode) (*_update_record)(ix, jx) += elem;
-#endif
   }
 
   /**
@@ -554,13 +456,6 @@ class ConvergentMatrix {
     wt1 = omp_get_wtime();
     printf("[%s] %f flush time: %f s\n", __func__, wt1 - _wt_init, wt1 - wt0);
 #endif
-
-#ifdef ENABLE_CONSISTENCY_CHECK
-    if (_consistency_mode)
-      for (long j = 0; j < Mat->n(); j++)
-        for (long i = 0; i < Mat->m(); i++)
-          if (ix[i] <= ix[j]) (*_update_record)(ix[i], ix[j]) += (*Mat)(i, j);
-#endif
   }
 
   /**
@@ -586,11 +481,6 @@ class ConvergentMatrix {
           long ij = LLD * ((jx / (NB * NPCOL)) * NB + jx % NB) +
                     (ix / (MB * NPROW)) * MB + ix % MB;
           _update_bins[rank].append(_local_ptr[i + j * LLD], ij);
-
-#ifdef ENABLE_CONSISTENCY_CHECK
-          if (_consistency_mode)
-            (*_update_record)(ix, jx) += _local_ptr[i + j * LLD];
-#endif
         } else {
           break;  // nothing left to do in this column ...
         }
@@ -602,9 +492,7 @@ class ConvergentMatrix {
   }
 
   /**
-   * Drain all update bins and wait on associated update RPCs. If the
-   * consistency check is turned on, it will run after all updates have been
-   * applied.
+   * Drain all update bins and wait on associated update RPCs.
    */
   inline void commit() {
     // synchronize
@@ -629,43 +517,34 @@ class ConvergentMatrix {
     // barrier() internally makes user-level progress, and will thus execute
     // remotely injected RPCs).
     upcxx::barrier();
+  }
 
-    // if enabled, the consistency check should only occur after commit
-#ifdef ENABLE_CONSISTENCY_CHECK
-    if (_consistency_mode) consistency_check(_update_record->data());
-#endif
+  /**
+   * Map over locally stored matrix elements, calling \c eq the stored value,
+   * row, and column for each. \c eq is expected to compare the element value
+   * with an externally maintained source of truth, returning \c false on
+   * mismatch.
+   *
+   * Returns \c false on the first element that fails to verify
+   *
+   * \param eq Single-element verification function.
+   *
+   * \b Note: Used only in tests.
+   */
+  bool verify_local_elements(std::function<bool(const T, long, long)> eq) {
+    for (long j = 0; j < _n; j++)
+      if ((j / NB) % NPCOL == _mycol) {
+        long off_j = LLD * ((j / (NB * NPCOL)) * NB + j % NB);
+        for (long i = 0; i < _m; i++)
+          if ((i / MB) % NPROW == _myrow) {
+            long ij = off_j + (i / (MB * NPROW)) * MB + i % MB;
+            if (!eq(_local_ptr[ij], i, j)) return false;
+          }
+      }
+    return true;
   }
 
   // Optional functionality enabled at compile time ...
-
-#ifdef ENABLE_CONSISTENCY_CHECK
-
-  /**
-   * Turn on consistency check mode.
-   *
-   * \b Note: MPI must be initialized in order for the consistency check to
-   * run on calls to commit() (necessary for summation of the replicated
-   * update records).
-   *
-   * \b Note: Requires compilation with \c ENABLE_CONSISTENCY_CHECK.
-   */
-  inline void consistency_check_on() {
-    _consistency_mode = true;
-    if (_update_record == nullptr) _update_record = new LocalMatrix<T>(_m, _n);
-    (*_update_record) = (T)0;
-  }
-
-  /**
-   * Turn off consistency check mode
-   *
-   * \b Note: Requires compilation with \c ENABLE_CONSISTENCY_CHECK.
-   */
-  inline void consistency_check_off() {
-    _consistency_mode = false;
-    if (_update_record != nullptr) delete _update_record;
-  }
-
-#endif  // ENABLE_CONSISTENCY_CHECK
 
 #ifdef ENABLE_MPIIO_SUPPORT
 
