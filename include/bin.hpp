@@ -30,6 +30,8 @@ void update_task(long size, upcxx::global_ptr<T> g_my_data,
  * Not very efficient in terms of space for the moment, in exchange for
  * simplicity.
  * \tparam T Matrix data type (e.g. float)
+ *
+ * This class is not thread safe, however it is thread compatible.
  */
 template <typename T>
 class Bin {

@@ -1,26 +1,40 @@
 /**
  * \mainpage ConvergentMatrix
  *
- * A "convergent" distributed dense matrix data structure
+ * A "convergent" distributed dense matrix data structure.
  *
  * Key components:
  *  - The \c ConvergentMatrix<T,NPROW,NPCOL,MB,NB,LLD> abstraction accumulates
  *    updates to the global distributed matrix in bins (\c Bin<T>) for later
  *    asynchronous application.
  *  - The \c Bin<T> object implements the binning concept in \c
- * ConvergentMatrix, and handles "flushing" its contents by triggering remote
- * asynchronous updates (\c update_task<T>).
+ *    ConvergentMatrix, and handles "flushing" its contents by triggering
+ *    remote updates (\c update_task<T>) via \c upcxx::rpc calls.
  *
- * Updates are represented as \c LocalMatrix<T> objects (see local_matrix.hpp),
- * along with indexing arrays which map into the global distributed index
- * space.
+ * Matrix updates may target either a single distributed matrix element or a
+ * "slice" of the distributed matrix, with the latter represented by a \c
+ * LocalMatrix<T> instance (see local_matrix.hpp) along with indexing arrays
+ * which map into the global distributed index space.
  *
- * Once a series of updates have been applied, the matrix can be "committed"
- * (see \c ConvergentMatrix::commit()) and all bins are flushed.
- * Thereafter, each process has its own PBLAS-compatible portion of the global
- * matrix, consistent with the block-cyclic distribution defined by the
- * template parameters of \c ConvergentMatrix and assuming a row-major order of
- * processes in the process grid.
+ * Once a series of updates have been initiated (see \c update), the matrix can
+ * be "committed" (see \c commit). Once \c commit returns, it is guaranteed
+ * that all previously requested remote updated have been applied. Multiple
+ * successive "rounds" of \c update and \c commit calls are permitted.
+ *
+ * After \c commit returns, each process has its own PBLAS-compatible portion
+ * of the global matrix, consistent with the block-cyclic distribution defined
+ * by the template parameters of \c ConvergentMatrix and assuming a row-major
+ * order of processes in the process grid.
+ *
+ * Progress: In general, it is assumed that \c ConvergentMatrix instances are
+ * only manipulated by the thread holding the master persona on a participating
+ * process. This ensures that assumptions surrounding quiescence in methods
+ * such as \c commit hold (i.e. entering operations that ensure user-level
+ * progress therein will execute remotely injected updates). See the UPC++
+ * Programming Guide or Specification for more details.
+ *
+ * Thread safety: ConvergentMatrix is not thread safe, however it is thread
+ * compatible.
  *
  * \b Note: by default, no documentation is produced for internal data
  * structures and functions (e.g. \c update_task<T> and \c Bin<T>). To enable
@@ -41,7 +55,7 @@
 
 #include <upcxx/upcxx.hpp>
 
-#if (defined(ENABLE_CONSISTENCY_CHECK) || defined(ENABLE_MPIIO_SUPPORT))
+#ifdef ENABLE_MPIIO_SUPPORT
 #include <mpi.h>
 #define ENABLE_MPI_HELPERS
 #endif
@@ -208,6 +222,8 @@ class ConvergentMatrix {
    * Initialize the \c ConvergentMatrix distributed matrix abstraction.
    * \param m Global leading dimension of the distributed matrix
    * \param n Global trailing dimension of the distributed matrix
+   *
+   * \b Note: This constructor is a collective operation.
    */
   ConvergentMatrix(long m, long n)
       : _m(m),
@@ -493,6 +509,11 @@ class ConvergentMatrix {
 
   /**
    * Drain all update bins and wait on associated update RPCs.
+   *
+   * Once commit returns, all remote updates previously requested via calls to
+   * \c update are guaranteed to have been applied.
+   *
+   * \b Note: \c commit is a collective operation.
    */
   inline void commit() {
     // synchronize
