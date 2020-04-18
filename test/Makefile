@@ -1,12 +1,8 @@
 include ../flags.mk
 
-CXX = $(UPCXXPATH)/bin/upcxx
-
 RUN = $(UPCXXPATH)/bin/upcxx-run
 
-UPCXXFLAGS = -codemode=O3 -network=smp
-
-CXXFLAGS = $(UPCXXFLAGS) -std=c++14 -I..
+CXXFLAGS += -I..
 
 LDFLAGS = $(UPCXXFLAGS)
 
@@ -45,7 +41,3 @@ clean :
 .PHONY : distclean
 distclean :
 	rm -rf $O $B
-
-.PHONY : fmt
-fmt :
-	clang-format -i bin_test.cpp
