@@ -18,6 +18,7 @@ namespace test {
 // TODO:
 // - Test other data types.
 // - Test slice-based symmetric updates.
+// - Test MPI-IO support.
 
 void randomElementUpdates() {
   constexpr int niter = 1000, nupdate = 10000;
