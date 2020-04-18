@@ -21,7 +21,7 @@ $O :
 $B :
 	@mkdir -p $B
 
-$O/%.o : %.cpp | $O
+$O/%.o : %.cpp ../include/bin.hpp ../include/convergent_matrix.hpp | $O
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 $B/bin_test : $O/bin_test.o | $B
