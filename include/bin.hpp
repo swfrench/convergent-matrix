@@ -99,19 +99,13 @@ class Bin {
     assert(_init);
 #endif
 
-    upcxx::promise<> p_src;  // Track source completion to render clear() safe
-
-    upcxx::rpc(_remote_tid,
-               upcxx::source_cx::as_promise(p_src) |
-                   upcxx::operation_cx::as_promise(*p_op),
-               update_task<T>, _data.size(), _g_remote_data,
+    // track completion of source-side serialization to render clear() safe:
+    auto cxs = upcxx::source_cx::as_buffered() |
+               upcxx::operation_cx::as_promise(*p_op);
+    upcxx::rpc(_remote_tid, cxs, update_task<T>, _data.size(), _g_remote_data,
                upcxx::make_view(_ix), upcxx::make_view(_data));
 
-    // NOTE: upcxx::future::wait invokes user-level progress, so remote updates
-    // _may_ execute here (if the caller holds the master persona).
-    p_src.finalize().wait();
-
-    // It is now safe to call clear().
+    // now safe to call clear()
     clear();
   }
 
