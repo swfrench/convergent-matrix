@@ -126,7 +126,7 @@ class ConvergentMatrix {
   // ** private methods **
   // *********************
 
-  inline void init_arrays() {
+  void init_arrays() {
     // allocate GASNet addressable storage and initialize.
     _g_local_ptr = upcxx::new_array<T>(LLD * _n_local);
     _local_ptr = _g_local_ptr.local();
@@ -153,7 +153,7 @@ class ConvergentMatrix {
     upcxx::barrier();
   }
 
-  inline void init_bins() {
+  void init_bins() {
     for (int rank = 0; rank < NPROW * NPCOL; rank++)
       _update_bins[rank].init(_remote_ptrs[rank]);
 
@@ -166,7 +166,7 @@ class ConvergentMatrix {
     std::shuffle(_bin_flush_order, _bin_flush_order + (NPROW * NPCOL), rgen);
   }
 
-  inline void flush(int thresh = 0) {
+  void flush(int thresh = 0) {
     for (int bin = 0; bin < NPROW * NPCOL; bin++) {
       int rank = _bin_flush_order[bin];
       if (_update_bins[rank].size() > thresh)
@@ -183,10 +183,10 @@ class ConvergentMatrix {
 
   // determine lower bound on local storage for a given block-cyclic
   // distribution
-  inline long roc(long m,   // matrix dimension
-                  long np,  // dimension of the process grid
-                  long ip,  // index in the process grid
-                  long mb)  // blocking factor
+  long roc(long m,   // matrix dimension
+           long np,  // dimension of the process grid
+           long ip,  // index in the process grid
+           long mb)  // blocking factor
   {
     long nblocks, m_local;
     // number of full blocks to be distributed
@@ -203,13 +203,11 @@ class ConvergentMatrix {
 
 #ifdef ENABLE_MPI_HELPERS
 
-  inline MPI_Datatype get_mpi_base_type(float *) { return MPI_FLOAT; }
+  MPI_Datatype get_mpi_base_type(float *) { return MPI_FLOAT; }
 
-  inline MPI_Datatype get_mpi_base_type(double *) { return MPI_DOUBLE; }
+  MPI_Datatype get_mpi_base_type(double *) { return MPI_DOUBLE; }
 
-  inline MPI_Datatype get_mpi_base_type() {
-    return get_mpi_base_type(_local_ptr);
-  }
+  MPI_Datatype get_mpi_base_type() { return get_mpi_base_type(_local_ptr); }
 
 #endif  // ENABLE_MPI_HELPERS
 
@@ -291,7 +289,7 @@ class ConvergentMatrix {
    * \b Note: The underlying storage _will_ be freed in the \c ConvergentMatrix
    * destructor - for a persistent copy, see \c get_local_data_copy().
    */
-  inline T *get_local_data() const { return _local_ptr; }
+  T *get_local_data() const { return _local_ptr; }
 
   /**
    * Get a point to a _copy_ of the local distributed matrix storage (can be
@@ -301,7 +299,7 @@ class ConvergentMatrix {
    * \c ConvergentMatrix destructor, in contrast to that from
    * \c get_local_data().
    */
-  inline T *get_local_data_copy() const {
+  T *get_local_data_copy() const {
     T *copy_ptr = new T[LLD * _n_local];
     std::copy(_local_ptr, _local_ptr + LLD * _n_local, copy_ptr);
     return copy_ptr;
@@ -313,7 +311,7 @@ class ConvergentMatrix {
    * Calls \c commit(), clearing remaining injected updates from the queue, and
    * then zeros the associated local storage.
    */
-  inline void reset() {
+  void reset() {
     // commit to complete any outstanding updates
     commit();
 
@@ -328,21 +326,21 @@ class ConvergentMatrix {
    * Get the flush threshold (maximum bulk-update bin size before a bin is
    * flushed and applied to its target).
    */
-  inline int bin_flush_threshold() const { return _bin_flush_threshold; }
+  int bin_flush_threshold() const { return _bin_flush_threshold; }
 
   /**
    * Set the flush threshold (maximum bulk-update bin size before a bin is
    * flushed and applied to its target).
    * \param thresh The bin-size threshold
    */
-  inline void bin_flush_threshold(int thresh) { _bin_flush_threshold = thresh; }
+  void bin_flush_threshold(int thresh) { _bin_flush_threshold = thresh; }
 
   /**
    * Get the progress interval, the number of bulk-update bin-flushes before
    * calling into upcxx::progress to ensure completion of remotely injected
    * updates.
    */
-  inline int progress_interval() const { return _progress_interval; }
+  int progress_interval() const { return _progress_interval; }
 
   /**
    * Set the progress interval, the number of bulk-update bin-flushes before
@@ -350,45 +348,45 @@ class ConvergentMatrix {
    * updates.
    * \param interval The progress interval
    */
-  inline void progress_interval(int interval) { _progress_interval = interval; }
+  void progress_interval(int interval) { _progress_interval = interval; }
 
   /**
    * Distributed matrix leading dimension
    */
-  inline long m() const { return _m; }
+  long m() const { return _m; }
 
   /**
    * Distributed matrix trailing dimension
    */
-  inline long n() const { return _n; }
+  long n() const { return _n; }
 
   /**
    * Process grid row index of this process
    */
-  inline long pgrid_row() const { return _myrow; }
+  long pgrid_row() const { return _myrow; }
 
   /**
    * Process grid column index of this process
    */
-  inline long pgrid_col() const { return _mycol; }
+  long pgrid_col() const { return _mycol; }
 
   /**
    * Minimum required leading dimension of local storage - must be less than
    * or equal to template parameter LLD
    */
-  inline long m_local() const { return _m_local; }
+  long m_local() const { return _m_local; }
 
   /**
    * Minimum required trailing dimension of local storage
    */
-  inline long n_local() const { return _n_local; }
+  long n_local() const { return _n_local; }
 
   /**
    * Remote random access (read only) to distributed matrix elements
    * \param ix Leading dimension index
    * \param jx Trailing dimension index
    */
-  inline T operator()(long ix, long jx) {
+  T operator()(long ix, long jx) {
     // infer process rank and linear index
     int rank = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
     long ij = LLD * ((jx / (NB * NPCOL)) * NB + jx % NB) +
@@ -422,7 +420,7 @@ class ConvergentMatrix {
    * \param ix Global index in distributed matrix (leading dimension)
    * \param jx Global index in distributed matrix (trailing dimension)
    */
-  inline void update(T elem, long ix, long jx) {
+  void update(T elem, long ix, long jx) {
     int rank = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
     long ij = LLD * ((jx / (NB * NPCOL)) * NB + jx % NB) +
               (ix / (MB * NPROW)) * MB + ix % MB;
@@ -515,7 +513,7 @@ class ConvergentMatrix {
    *
    * \b Note: \c commit is a collective operation.
    */
-  inline void commit() {
+  void commit() {
     // synchronize
     upcxx::barrier();
 

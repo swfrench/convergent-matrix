@@ -47,13 +47,13 @@ class LocalMatrix {
     if (_alloc) delete[] _data;
   }
 
-  inline void override_free() { _alloc = true; }
+  void override_free() { _alloc = true; }
 
-  inline long m() const { return _trans ? _n : _m; }
+  long m() const { return _trans ? _n : _m; }
 
-  inline long n() const { return _trans ? _m : _n; }
+  long n() const { return _trans ? _m : _n; }
 
-  inline T *data() const { return _data; }
+  T *data() const { return _data; }
 
   LocalMatrix<T> *trans() {
     LocalMatrix<T> *C = new LocalMatrix<T>(_m, _n, _ld, _data);
@@ -61,7 +61,7 @@ class LocalMatrix {
     return C;
   }
 
-  inline T &operator()(long i, long j) const {
+  T &operator()(long i, long j) const {
 #ifndef NOCHECK
     assert(i >= 0);
     assert(j >= 0);
@@ -71,7 +71,7 @@ class LocalMatrix {
     return _trans ? _data[j + i * _ld] : _data[i + _ld * j];
   }
 
-  inline T &operator()(long i) const {
+  T &operator()(long i) const {
 #ifndef NOCHECK
     assert((m() == 1 && _trans) || (n() == 1 && !_trans));
 #endif

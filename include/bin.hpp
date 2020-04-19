@@ -42,7 +42,7 @@ class Bin {
   std::vector<long> _ix;                // linear indexing for target
   std::vector<T> _data;                 // update data for target
 
-  inline void clear() {
+  void clear() {
     _ix.clear();
     _data.clear();
   }
@@ -68,7 +68,7 @@ class Bin {
    *
    * \b Note: It is erroneous to call this on a previously initialized Bin.
    */
-  inline void init(upcxx::global_ptr<T> g_remote_data) {
+  void init(upcxx::global_ptr<T> g_remote_data) {
     assert(!_init);
     _remote_tid = g_remote_data.where();
     _g_remote_data = g_remote_data;
@@ -78,14 +78,14 @@ class Bin {
   /**
    * Current size of the bin (number of update elems not yet applied)
    */
-  inline long size() const { return _ix.size(); }
+  long size() const { return _ix.size(); }
 
   /**
    * Add an elemental update to this bin
    * \param data Elemental update (r.h.s. of +=)
    * \param ij Linear index (on the target) of element to be updated
    */
-  inline void append(T data, long ij) {
+  void append(T data, long ij) {
     _ix.push_back(ij);
     _data.push_back(data);
   }
