@@ -41,8 +41,14 @@ as `commit` hold (i.e. entering operations that ensure user-level progress
 therein will execute remotely injected updates). See the UPC++ Programming
 Guide or Specification for more details.
 
-**Thread safety**: `ConvergentMatrix` is not thread safe (see also notes on
-Progress above).
+**Thread safety**: `ConvergentMatrix` is not thread safe, though it is thread
+compatible modulo progress implications introduced above. Notably, concurrent
+remotely injected matrix update RPCs are not *explicitly* serialized (e.g. via
+locks) but are instead *implicitly* serialized through progress guarantees
+surrounding dispatch of injected RPCs (i.e. in a valid UPC++ program, only a
+single thread associated with a given process will hold the master persona at a
+give time, and only user-level progress under the master persona will dispatch
+injected RPCs).
 
 ## Dependencies
 
