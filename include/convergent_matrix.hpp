@@ -173,11 +173,12 @@ class ConvergentMatrix {
         _update_bins[rank].flush(_curr_promise.get());
     }
 
-    // note: every _progress_interval calls to flush(), upcxx::progress will be
-    // called, unless thresh is 0 (in which case we always call progress).
-    if (++_flush_counter == _progress_interval) {
-      upcxx::progress();
+    if (thresh == 0 || ++_flush_counter == _progress_interval) {
+      upcxx::progress();  // user-level progress: may execute injected updates
       _flush_counter = 0;
+    } else {
+      // at least invoke internal-level progress
+      upcxx::progress(upcxx::progress_level::internal);
     }
   }
 
