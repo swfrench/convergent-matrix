@@ -4,6 +4,11 @@ RUN = $(UPCXXPATH)/bin/upcxx-run
 
 CXXFLAGS += -I..
 
+# Optional: Include MPI-IO support for matrix save / load in cm_test. Requires
+# either the use of a programming environment that supports upcxx and MPI side
+# by side or (e.g. for local testing) selection of the GASNet mpi-conduit.
+CXXFLAGS += -DENABLE_MPIIO_SUPPORT
+
 LDFLAGS = $(UPCXXFLAGS)
 
 O = obj

@@ -204,6 +204,8 @@ class ConvergentMatrix {
 
 #ifdef ENABLE_MPI_HELPERS
 
+  MPI_Datatype get_mpi_base_type(int *) { return MPI_INT; }
+
   MPI_Datatype get_mpi_base_type(float *) { return MPI_FLOAT; }
 
   MPI_Datatype get_mpi_base_type(double *) { return MPI_DOUBLE; }
