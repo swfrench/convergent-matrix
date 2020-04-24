@@ -104,9 +104,9 @@ class ConvergentMatrix {
   long _myrow, _mycol;      // coordinate in the process grid
 
   // update binning and application
-  int _flush_counter;
   int _progress_interval;
   int _bin_flush_threshold;
+  int _flush_counter;
   int _bin_flush_order[NPROW * NPCOL];
   Bin<T> _update_bins[NPROW * NPCOL];
 
@@ -229,8 +229,8 @@ class ConvergentMatrix {
   ConvergentMatrix(long m, long n)
       : _m(m),
         _n(n),
-        _bin_flush_threshold(DEFAULT_BIN_FLUSH_THRESHOLD),
         _progress_interval(DEFAULT_PROGRESS_INTERVAL),
+        _bin_flush_threshold(DEFAULT_BIN_FLUSH_THRESHOLD),
         _flush_counter(0) {
     // checks on matrix dimension
     assert(_m > 0);
@@ -621,7 +621,7 @@ class ConvergentMatrix {
 
     // sanity check on check on distributed array data size
     MPI_Type_size(distmat, &distmat_size);
-    assert(distmat_size / sizeof(T) == (_m_local * _n_local));
+    assert(distmat_size / static_cast<int>(sizeof(T)) == (_m_local * _n_local));
 
     // open for writing
     MPI_File_open(MPI_COMM_WORLD, fname, MPI_MODE_CREATE | MPI_MODE_WRONLY,
@@ -716,7 +716,7 @@ class ConvergentMatrix {
 
     // sanity check on check on distributed array data size
     MPI_Type_size(distmat, &distmat_size);
-    assert(distmat_size / sizeof(T) == (_m_local * _n_local));
+    assert(distmat_size / static_cast<int>(sizeof(T)) == (_m_local * _n_local));
 
     // open read-only
     MPI_File_open(MPI_COMM_WORLD, fname, MPI_MODE_RDONLY, MPI_INFO_NULL,
