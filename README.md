@@ -22,6 +22,9 @@ Since then, `ConvergentMatrix` has been ported to the UPC++ v1.0 spec and
 adopted newly supported idioms (e.g. replacing remote allocation + one-sided
 copy + asynchronous remote task invocation with simpler serialization + RPC).
 
+**Note**: The final release of `ConvergentMatrix` based on the v0.1 spec is
+`r20150916`.
+
 ## Properties
 
 `ConvergentMatrix` accepts additive updates to distributed matrix elements,
