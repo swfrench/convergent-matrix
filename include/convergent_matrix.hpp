@@ -45,11 +45,11 @@
 #pragma once
 
 #include <cassert>
-#include <cstdio>
 #include <cstdlib>
 
 #include <algorithm>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <random>
 
@@ -77,6 +77,11 @@
 #ifndef DEFAULT_PROGRESS_INTERVAL
 #define DEFAULT_PROGRESS_INTERVAL 1
 #endif
+
+#define CM_LOG std::cerr \
+  << __FILE__ << ":" << __LINE__ << " " << __func__ << " @ " \
+  << upcxx::rank_me() << "] "
+
 
 /**
  * Contains classes associated with the convergent-matrix abstraction
@@ -462,7 +467,7 @@ class ConvergentMatrix {
     }
 #ifdef ENABLE_UPDATE_TIMING
     wt1 = omp_get_wtime();
-    printf("[%s] %f binning time: %f s\n", __func__, wt1 - _wt_init, wt1 - wt0);
+    CM_LOG << "elapsed time: " << wt1 - _wt_init << " s binning time: " << wt1 - wt0 << " s" << std::endl;
 #endif
 
 #ifdef ENABLE_UPDATE_TIMING
@@ -471,7 +476,7 @@ class ConvergentMatrix {
     flush(_bin_flush_threshold);
 #ifdef ENABLE_UPDATE_TIMING
     wt1 = omp_get_wtime();
-    printf("[%s] %f flush time: %f s\n", __func__, wt1 - _wt_init, wt1 - wt0);
+    CM_LOG << "elapsed time: " << wt1 - _wt_init << " s flush time: " << wt1 - wt0 << " s" << std::endl;
 #endif
   }
 
@@ -646,8 +651,7 @@ class ConvergentMatrix {
     MPI_File_close(&f_ata);
     MPI_Reduce(&wt_io, &wt_io_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     if (mpi_rank == 0)
-      printf("[%s] max time spent in matrix write: %.3f s\n", __func__,
-             wt_io_max);
+      CM_LOG << "max time spent in matrix write: " << wt_io_max << " s" << std::endl;
 
     // sanity check on data written
     MPI_Get_count(&status, base_dtype, &write_count);
@@ -735,8 +739,7 @@ class ConvergentMatrix {
     MPI_File_close(&f_ata);
     MPI_Reduce(&wt_io, &wt_io_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     if (mpi_rank == 0)
-      printf("[%s] max time spent in matrix read: %.3f s\n", __func__,
-             wt_io_max);
+      CM_LOG << "max time spent in matrix read: " << wt_io_max << " s" << std::endl;
 
     // sanity check on data read
     MPI_Get_count(&status, base_dtype, &read_count);
