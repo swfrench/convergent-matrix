@@ -48,6 +48,7 @@
 #include <cstdlib>
 
 #include <algorithm>
+#include <chrono>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -58,10 +59,6 @@
 #ifdef ENABLE_MPIIO_SUPPORT
 #include <mpi.h>
 #define ENABLE_MPI_HELPERS
-#endif
-
-#ifdef ENABLE_UPDATE_TIMING
-#include <omp.h>
 #endif
 
 // cm additions / internals
@@ -78,10 +75,9 @@
 #define DEFAULT_PROGRESS_INTERVAL 1
 #endif
 
-#define CM_LOG std::cerr \
-  << __FILE__ << ":" << __LINE__ << " " << __func__ << " @ " \
-  << upcxx::rank_me() << "] "
-
+#define CM_LOG                                                         \
+  std::cerr << __FILE__ << ":" << __LINE__ << " " << __func__ << " @ " \
+            << upcxx::rank_me() << "] "
 
 /**
  * Contains classes associated with the convergent-matrix abstraction
@@ -123,8 +119,10 @@ class ConvergentMatrix {
   upcxx::global_ptr<T> _g_local_ptr;
   upcxx::global_ptr<T> _remote_ptrs[NPROW * NPCOL];
 
+  using wt_clock_t = std::chrono::high_resolution_clock;
+  using wt_t = std::chrono::time_point<wt_clock_t>;
 #ifdef ENABLE_UPDATE_TIMING
-  double _wt_init;
+  wt_t _wt_init;
 #endif
 
   // *********************
@@ -270,7 +268,7 @@ class ConvergentMatrix {
     _curr_promise = std::make_unique<upcxx::promise<>>();
 
 #ifdef ENABLE_UPDATE_TIMING
-    _wt_init = omp_get_wtime();
+    _wt_init = wt_clock_t::now();
 #endif
   }
 
@@ -443,16 +441,13 @@ class ConvergentMatrix {
    * \param ix Maps slice into distributed matrix (both dimensions)
    */
   void update(LocalMatrix<T> *Mat, long *ix) {
-#ifdef ENABLE_UPDATE_TIMING
-    double wt0, wt1;
-#endif
 #ifndef NOCHECK
     // must be square to be symmetric
     assert(Mat->m() == Mat->n());
 #endif
 
 #ifdef ENABLE_UPDATE_TIMING
-    wt0 = omp_get_wtime();
+    auto wt0 = wt_clock_t::now();
 #endif
     // bin the local update
     for (long j = 0; j < Mat->n(); j++) {
@@ -466,17 +461,27 @@ class ConvergentMatrix {
         }
     }
 #ifdef ENABLE_UPDATE_TIMING
-    wt1 = omp_get_wtime();
-    CM_LOG << "elapsed time: " << wt1 - _wt_init << " s binning time: " << wt1 - wt0 << " s" << std::endl;
+    auto wt1 = wt_clock_t::now();
+    {
+      std::chrono::duration<double> elapsed = wt1 - _wt_init;
+      std::chrono::duration<double> binning = wt1 - wt0;
+      CM_LOG << "elapsed time: " << elapsed.count()
+             << " s binning time: " << binning.count() << " s" << std::endl;
+    }
 #endif
 
 #ifdef ENABLE_UPDATE_TIMING
-    wt0 = omp_get_wtime();
+    wt0 = wt_clock_t::now();
 #endif
     flush(_bin_flush_threshold);
 #ifdef ENABLE_UPDATE_TIMING
-    wt1 = omp_get_wtime();
-    CM_LOG << "elapsed time: " << wt1 - _wt_init << " s flush time: " << wt1 - wt0 << " s" << std::endl;
+    wt1 = wt_clock_t::now();
+    {
+      std::chrono::duration<double> elapsed = wt1 - _wt_init;
+      std::chrono::duration<double> flush = wt1 - wt0;
+      CM_LOG << "elapsed time: " << elapsed.count()
+             << " s flush time: " << flush.count() << " s" << std::endl;
+    }
 #endif
   }
 
@@ -594,7 +599,6 @@ class ConvergentMatrix {
 #ifdef THREAD_FUNNELED_REQUIRED
     int mpi_thread;
 #endif  // THREAD_FUNNELED_REQUIRED
-    double wt_io, wt_io_max;
     MPI_Status status;
     MPI_Datatype distmat;
     MPI_File f_ata;
@@ -642,16 +646,18 @@ class ConvergentMatrix {
           _local_ptr[i + j * _m_local] = _local_ptr[i + j * LLD];
 
     // write out local data
-    wt_io = -MPI_Wtime();
+    auto start = wt_clock_t::now();
     MPI_File_write_all(f_ata, _local_ptr, _m_local * _n_local, base_dtype,
                        &status);
-    wt_io = wt_io + MPI_Wtime();
+    std::chrono::duration<double> wt_io_duration = wt_clock_t::now() - start;
 
     // close; report io time
     MPI_File_close(&f_ata);
+    double wt_io_max, wt_io = wt_io_duration.count();
     MPI_Reduce(&wt_io, &wt_io_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     if (mpi_rank == 0)
-      CM_LOG << "max time spent in matrix write: " << wt_io_max << " s" << std::endl;
+      CM_LOG << "max time spent in matrix write: " << wt_io_max << " s"
+             << std::endl;
 
     // sanity check on data written
     MPI_Get_count(&status, base_dtype, &write_count);
@@ -688,7 +694,6 @@ class ConvergentMatrix {
 #ifdef THREAD_FUNNELED_REQUIRED
     int mpi_thread;
 #endif  // THREAD_FUNNELED_REQUIRED
-    double wt_io, wt_io_max;
     MPI_Status status;
     MPI_Datatype distmat;
     MPI_File f_ata;
@@ -730,16 +735,18 @@ class ConvergentMatrix {
     MPI_File_set_view(f_ata, 0, base_dtype, distmat, "native", MPI_INFO_NULL);
 
     // read in local data
-    wt_io = -MPI_Wtime();
+    auto start = wt_clock_t::now();
     MPI_File_read_all(f_ata, _local_ptr, _m_local * _n_local, base_dtype,
                       &status);
-    wt_io = wt_io + MPI_Wtime();
+    std::chrono::duration<double> wt_io_duration = wt_clock_t::now() - start;
 
     // close; report io time
     MPI_File_close(&f_ata);
+    double wt_io_max, wt_io = wt_io_duration.count();
     MPI_Reduce(&wt_io, &wt_io_max, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
     if (mpi_rank == 0)
-      CM_LOG << "max time spent in matrix read: " << wt_io_max << " s" << std::endl;
+      CM_LOG << "max time spent in matrix read: " << wt_io_max << " s"
+             << std::endl;
 
     // sanity check on data read
     MPI_Get_count(&status, base_dtype, &read_count);
