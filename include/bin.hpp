@@ -10,7 +10,7 @@ namespace cm {
 /// @cond INTERNAL_DOCS
 
 /**
- * A task that performs remote updates (spawned by Bin<T>)
+ * Applies remote updates via RPC (spawned by Bin<T>)
  * \param g_my_data Reference to local storage on the target
  * \param ix View to update indexing (already transferred target)
  * \param data View to update data (already transferred target)
@@ -26,9 +26,9 @@ void update_task(long size, upcxx::global_ptr<T> g_my_data,
 }
 
 /**
- * Implements the binning / remote application for a single thread
- * Not very efficient in terms of space for the moment, in exchange for
- * simplicity.
+ * Implements the binning / remote application for a single participating
+ * process. Not very efficient in terms of space (e.g. duplicate updates to the
+ * same remote data elements are not merged), in exchange for simplicity.
  * \tparam T Matrix data type (e.g. float)
  *
  * This class is not thread safe, however it is thread compatible.
@@ -37,7 +37,7 @@ template <typename T>
 class Bin {
  private:
   bool _init;                           // whether fields intialized
-  int _remote_tid;                      // thread id of target
+  int _remote_rank;                     // rank of target
   upcxx::global_ptr<T> _g_remote_data;  // global_ptr _local_ to target
   std::vector<long> _ix;                // linear indexing for target
   std::vector<T> _data;                 // update data for target
@@ -59,7 +59,7 @@ class Bin {
    */
   Bin(upcxx::global_ptr<T> g_remote_data)
       : _init(true),
-        _remote_tid(g_remote_data.where()),
+        _remote_rank(g_remote_data.where()),
         _g_remote_data(g_remote_data) {}
 
   /**
@@ -70,7 +70,7 @@ class Bin {
    */
   void init(upcxx::global_ptr<T> g_remote_data) {
     assert(!_init);
-    _remote_tid = g_remote_data.where();
+    _remote_rank = g_remote_data.where();
     _g_remote_data = g_remote_data;
     _init = true;
   }
@@ -91,7 +91,7 @@ class Bin {
   }
 
   /**
-   * "Flush" this bin by initiate remote async update using the current bin
+   * "Flush" this bin by initiating a remote update with the current bin
    * contents.
    * \param p_op upcxx::promise<> pointer to which RPC remote operation
    * completion will be registered
@@ -104,7 +104,7 @@ class Bin {
     // track completion of source-side serialization to render clear() safe:
     auto cxs = upcxx::source_cx::as_buffered() |
                upcxx::operation_cx::as_promise(*p_op);
-    upcxx::rpc(_remote_tid, cxs, update_task<T>, _data.size(), _g_remote_data,
+    upcxx::rpc(_remote_rank, cxs, update_task<T>, _data.size(), _g_remote_data,
                upcxx::make_view(_ix), upcxx::make_view(_data));
 
     // now safe to call clear()
