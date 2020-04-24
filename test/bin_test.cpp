@@ -7,10 +7,10 @@
 
 #include "include/bin.hpp"
 
-namespace test {
+#define LOG \
+  std::cerr << __FILE__ << ":" << __LINE__ << " @ " << upcxx::rank_me() << "] "
 
-// TODO:
-// - Test other data types.
+namespace test {
 
 // Each process writes its own rank at index `rank` in other processes' local
 // portion of the dist_object.
@@ -36,9 +36,8 @@ void singleUpdate() {
   const int *local = g_data->local();
   for (int i = 0; i < num_ranks; ++i) {
     if (local[i] == i) continue;
-    std::cerr << __func__ << " " << __FILE__ << ":" << __LINE__ << " @ "
-              << upcxx::rank_me() << "] verification failed at index " << i
-              << " want: " << i << " got: " << local[i] << std::endl;
+    LOG << "verification failed at index " << i << " want: " << i
+        << " got: " << local[i] << std::endl;
     exit(1);
   }
 }
@@ -87,9 +86,8 @@ void randomMultiUpdate() {
 
     for (int i = 0; i < nlocal; ++i) {
       if (local[i] == sum[nlocal * rank + i]) continue;
-      std::cerr << __func__ << " " << __FILE__ << ":" << __LINE__ << " @ "
-                << upcxx::rank_me() << "] verification failed at index " << i
-                << " want: " << i << " got: " << local[i] << std::endl;
+      LOG << "verification failed at index " << i << " want: " << i
+          << " got: " << local[i] << std::endl;
       exit(1);
     }
 
