@@ -2,7 +2,7 @@ include ../flags.mk
 
 RUN = $(UPCXXPATH)/bin/upcxx-run
 
-CXXFLAGS += -I..
+CXXFLAGS += -I.. -Wall -Werror
 
 # Optional: Include MPI-IO support for matrix save / load in cm_test. Requires
 # either the use of a programming environment that supports upcxx and MPI side
