@@ -100,9 +100,9 @@ template <typename T,              // matrix type
 class ConvergentMatrix {
  private:
   // matrix dimension and process grid
-  long _m, _n;              // matrix global dimensions
-  long _m_local, _n_local;  // local-storage minimum dimensions
-  long _myrow, _mycol;      // coordinate in the process grid
+  const long _m, _n;              // matrix global dimensions
+  const long _myrow, _mycol;      // coordinate in the process grid
+  const long _m_local, _n_local;  // local-storage minimum dimensions
 
   // update binning and application
   int _progress_interval;
@@ -232,6 +232,12 @@ class ConvergentMatrix {
   ConvergentMatrix(long m, long n)
       : _m(m),
         _n(n),
+        // setup block-cyclic distribution
+        _myrow(upcxx::rank_me() / NPROW),
+        _mycol(upcxx::rank_me() % NPCOL),
+        // calculate minimum req'd local dimensions
+        _m_local(roc(_m, NPROW, _myrow, MB)),
+        _n_local(roc(_n, NPCOL, _mycol, NB)),
         _progress_interval(DEFAULT_PROGRESS_INTERVAL),
         _bin_flush_threshold(DEFAULT_BIN_FLUSH_THRESHOLD),
         _flush_counter(0) {
@@ -241,14 +247,6 @@ class ConvergentMatrix {
 
     // check on block-cyclic distribution
     assert(NPCOL * NPROW == upcxx::rank_n());
-
-    // setup block-cyclic distribution
-    _myrow = upcxx::rank_me() / NPROW;
-    _mycol = upcxx::rank_me() % NPCOL;
-
-    // calculate minimum req'd local dimensions
-    _m_local = roc(_m, NPROW, _myrow, MB);
-    _n_local = roc(_n, NPCOL, _mycol, NB);
 
     // ensure local storage is of nonzero size
     assert(_m_local > 0);
