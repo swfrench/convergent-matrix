@@ -525,6 +525,11 @@ class ConvergentMatrix {
    * \b Note: \c commit is a collective operation.
    */
   void commit() {
+    // TODO: The current completion tracking approach is rather inefficient:
+    // notifications must be delivered for all injected updates (i.e. tracking
+    // overhead is expected to scale with the number of updates). Investigate
+    // using rpc_ff in Bin combined with a count-based quiescence approach.
+
     // synchronize
     upcxx::barrier();
 
@@ -535,7 +540,6 @@ class ConvergentMatrix {
     upcxx::barrier();
 
     // progress any newly injected RPCs.
-    // TODO: We may need a stronger guarantee of quiescence here.
     upcxx::progress();
 
     // wait on dispatched update RPC completion and reset the promise for our
