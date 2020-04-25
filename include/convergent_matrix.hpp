@@ -43,6 +43,7 @@
 #include <iostream>
 #include <memory>
 #include <random>
+#include <unordered_map>
 
 #include <upcxx/upcxx.hpp>
 
@@ -126,6 +127,9 @@ class ConvergentMatrix {
         : updates_applied(0), elements(upcxx::new_array<T>(size)) {}
   };
   upcxx::dist_object<DistData> _dist_data;
+
+  // cache for remote storage pointers fetched from _dist_data
+  std::unordered_map<int /*rank*/, upcxx::global_ptr<T>> _elements_cached;
 
   // single container for batching / dispatching remote updates
   struct Bin {
@@ -378,9 +382,13 @@ class ConvergentMatrix {
     int rank = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
     long ij = LLD * ((jx / (NB * NPCOL)) * NB + jx % NB) +
               (ix / (MB * NPROW)) * MB + ix % MB;
-    // TODO: Cache global_ptr<T>s for remote elements.
-    upcxx::global_ptr<DistData> ddata = _dist_data.fetch(rank).wait();
-    return upcxx::rget(ddata->elements + ij).wait();
+    auto it = _elements_cached.find(rank);
+    if (it == _elements_cached.end()) {
+      auto ddata = _dist_data.fetch(rank).wait();
+      auto ins = _elements_cached.insert({rank, ddata.elements});
+      it = ins.first;
+    }
+    return upcxx::rget(it->second + ij).wait();
   }
 
   /**
