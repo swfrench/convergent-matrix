@@ -516,29 +516,23 @@ class ConvergentMatrix {
    * \b Note: \c commit is a collective operation.
    */
   void commit() {
-    // synchronize
-    upcxx::barrier();
-
-    // flush any remaining non-empty bins (i.e. bin size threshold is zero).
+    // flush any remaining non-empty bins (i.e. size threshold is zero), after
+    // which we know that our local updates-sent counts are fully up to date.
     flush();
 
-    // sync: ensure all remote update RPCs have been dispatched.
-    upcxx::barrier();
-
     // achieve quiescence: spin in progress until the locally applied number of
-    // updates matches the number of globally injected updates.
-    std::vector<long> updates_sent;
+    // updates matches the expected number of globally injected updates.
+    std::vector<long> updates_expected;
     for (const auto &bin : _bins) {
-      updates_sent.push_back(bin->updates_sent);
+      updates_expected.push_back(bin->updates_sent);
     }
-    std::vector<long> updates_expected(updates_sent.size(), 0);
-    upcxx::reduce_all(updates_sent.data(), updates_expected.data(),
+    upcxx::reduce_all(updates_expected.data(), updates_expected.data(),
                       updates_expected.size(), upcxx::op_fast_add)
         .wait();
-    while (_dist_data->updates_applied < updates_expected[upcxx::rank_me()])
-      upcxx::progress();
+    const long expected = updates_expected[upcxx::rank_me()];
+    while (_dist_data->updates_applied < expected) upcxx::progress();
 
-    // sync: ensure all ranks have entered quiescence
+    // sync: return when *all* ranks have entered quiescence
     upcxx::barrier();
   }
 
