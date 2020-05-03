@@ -12,17 +12,24 @@ namespace cm {
 /**
  * Applies remote updates via RPC (spawned by Bin<T>)
  * \param g_my_data Reference to local storage on the target
- * \param ix View to update indexing (already transferred target)
- * \param data View to update data (already transferred target)
+ * \param g_ix Update indexing (already transferred target)
+ * \param g_data Update data (already transferred target)
  */
 template <typename T>
 void update_task(long size, upcxx::global_ptr<T> g_my_data,
-                 upcxx::view<long> ix, upcxx::view<T> data) {
+                 upcxx::global_ptr<long> g_ix, upcxx::global_ptr<T> g_data) {
 #ifndef NOCHECK
   assert(g_my_data.is_local());
+  assert(g_ix.is_local());
+  assert(g_data.is_local());
 #endif
+  long *buff_ix = g_ix.local();
+  T *buff_data = g_data.local();
   T *my_data = g_my_data.local();
-  for (long k = 0; k < size; k++) my_data[ix[k]] += data[k];
+  for (long k = 0; k < size; k++) my_data[buff_ix[k]] += buff_data[k];
+  // clean up transfer buffers
+  upcxx::delete_array(g_ix);
+  upcxx::delete_array(g_data);
 }
 
 /**
@@ -101,13 +108,29 @@ class Bin {
     assert(_init);
 #endif
 
-    // track completion of source-side serialization to render clear() safe:
-    auto cxs = upcxx::source_cx::as_buffered() |
-               upcxx::operation_cx::as_promise(*p_op);
-    upcxx::rpc(_remote_rank, cxs, update_task<T>, _data.size(), _g_remote_data,
-               upcxx::make_view(_ix), upcxx::make_view(_data));
+    // allocate remote buffers for update data
+    auto buffers =
+        upcxx::rpc(
+            _remote_rank,
+            [](long size)
+                -> std::pair<upcxx::global_ptr<long>, upcxx::global_ptr<T>> {
+              return {upcxx::new_array<long>(size), upcxx::new_array<T>(size)};
+            },
+            size())
+            .wait();
 
-    // now safe to call clear()
+    // transfer update data to the target
+    upcxx::promise<> p_put;
+    upcxx::rput(_ix.data(), buffers.first, size(),
+                upcxx::operation_cx::as_promise(p_put));
+    upcxx::rput(_data.data(), buffers.second, size(),
+                upcxx::operation_cx::as_promise(p_put));
+    p_put.finalize().wait();  // now safe to clear()
+
+    upcxx::rpc(_remote_rank, upcxx::operation_cx::as_promise(*p_op),
+               update_task<T>, size(), _g_remote_data, buffers.first,
+               buffers.second);
+
     clear();
   }
 
