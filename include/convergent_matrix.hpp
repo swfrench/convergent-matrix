@@ -169,15 +169,17 @@ class ConvergentMatrix {
     std::shuffle(_bin_flush_order, _bin_flush_order + (NPROW * NPCOL), rgen);
   }
 
-  void flush(int thresh = 0) {
+  void flush(int thresh) {
     for (int bin = 0; bin < NPROW * NPCOL; bin++) {
       int rank = _bin_flush_order[bin];
       if (_update_bins[rank].size() > thresh)
         _update_bins[rank].flush(_curr_promise.get());
     }
 
-    if (thresh == 0 || ++_flush_counter == _progress_interval) {
-      upcxx::progress();  // user-level progress: may execute injected updates
+    if (_progress_interval > 0 && ++_flush_counter == _progress_interval) {
+      // invoke user-level progress; may execute injected update RPCs if the
+      // caller holds the master persona.
+      upcxx::progress();
       _flush_counter = 0;
     } else {
       // at least invoke internal-level progress
@@ -340,17 +342,33 @@ class ConvergentMatrix {
   void bin_flush_threshold(int thresh) { _bin_flush_threshold = thresh; }
 
   /**
-   * Get the progress interval, the number of bulk-update bin-flushes before
-   * calling into upcxx::progress to ensure completion of remotely injected
-   * updates.
+   * Get the progress interval, the number of successive calls to \c update
+   * after which \c upcxx::progress will be called in order to facilitate
+   * completion of remotely injected updates (user-level progress).
+   *
+   * Points of note:
+   * - These calls into \c progress will only have their intended effect if the
+   *   caller of \c update holds the master persona.
+   * - If not strictly positive, user-level \c progress calls in \c update are
+   *   disabled.
+   * - Even if disabled, or during calls to \c update falling between the
+   *   progress interval, internal-level progress will still be made.
    */
   int progress_interval() const { return _progress_interval; }
 
   /**
-   * Set the progress interval, the number of bulk-update bin-flushes before
-   * calling into upcxx::progress to ensure completion of remotely injected
-   * updates.
+   * Set the progress interval, the number of successive calls to \c update
+   * after which \c upcxx::progress will be called in order to facilitate
+   * completion of remotely injected updates (user-level progress).
    * \param interval The progress interval
+   *
+   * Points of note:
+   * - These calls into \c progress will only have their intended effect if the
+   *   caller of \c update holds the master persona.
+   * - If not strictly positive, user-level \c progress calls in \c update are
+   *   disabled.
+   * - Even if disabled, or during calls to \c update falling between the
+   *   progress interval, internal-level progress will still be made.
    */
   void progress_interval(int interval) { _progress_interval = interval; }
 
@@ -534,7 +552,7 @@ class ConvergentMatrix {
     upcxx::barrier();
 
     // flush all non-empty bins (i.e. bin size threshold is zero).
-    flush();
+    flush(/* threshold */ 0);
 
     // sync: ensure all remote update RPCs have been dispatched.
     upcxx::barrier();
