@@ -55,7 +55,8 @@ void randomMultiUpdate() {
   upcxx::dist_object<upcxx::global_ptr<int>> g_data(
       upcxx::new_array<int>(nlocal));
 
-  const int *local = g_data->local();
+  int *local = g_data->local();
+  std::fill(local, local + nlocal, 0);
 
   std::vector<cm::Bin<int>> bins(num_ranks);
   for (int i = 0; i < num_ranks; ++i) bins[i].init(g_data.fetch(i).wait());
