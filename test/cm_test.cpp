@@ -313,12 +313,15 @@ void randomElementUpdatesMPIIO() {
   }
 
   // write out the current state ...
-  dist_mat1.save("/tmp/dist_mat1");
+  const char* save_dir = std::getenv("CM_TEST_DIR");
+  std::string save_path = save_dir == nullptr ? "/tmp" : save_dir;
+  save_path += "/dist_mat1";
+  dist_mat1.save(save_path.c_str());
 
   cm::ConvergentMatrix<T, NPROW, NPCOL, MB, NB, 1024> dist_mat2(2000, 1000);
 
   // ... and read it back in again ...
-  dist_mat2.load("/tmp/dist_mat1");
+  dist_mat2.load(save_path.c_str());
 
   // ... and re-verify.
   success = dist_mat2.verify_local_elements([&sum](T val, long i, long j) {
@@ -349,7 +352,7 @@ void runAllTests() {
 
 }  // namespace test
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   upcxx::init();
 
 #ifdef ENABLE_MPIIO_SUPPORT
