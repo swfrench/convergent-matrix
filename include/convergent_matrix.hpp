@@ -119,16 +119,16 @@ class ConvergentMatrix {
   int _bin_flush_threshold = DEFAULT_BIN_FLUSH_THRESHOLD;
   int _flush_counter = 0;
 
-  // single container for distributed data
-  struct DistData {
+  // single container for distributed state
+  struct State {
     long updates_applied;           // number of updates applied
     upcxx::global_ptr<T> elements;  // matrix elements
-    DistData(long size)
+    State(long size)
         : updates_applied(0), elements(upcxx::new_array<T>(size)) {}
   };
-  upcxx::dist_object<DistData> _dist_data;
+  upcxx::dist_object<State> _d_state;
 
-  // cache for remote storage pointers fetched from _dist_data
+  // cache for remote storage pointers fetched from _d_state
   std::unordered_map<int /*rank*/, upcxx::global_ptr<T>> _elements_cached;
 
   // single container for batching / dispatching remote updates
@@ -143,20 +143,55 @@ class ConvergentMatrix {
       data.push_back(val);
       inds.push_back(ij);
     }
-    void flush(upcxx::dist_object<DistData> &ddata) {
-      if (size() == 0) return;
-      upcxx::rpc_ff(rank, upcxx::source_cx::as_buffered(),
-                    [](upcxx::dist_object<DistData> &ddata, long n,
-                       upcxx::view<T> data, upcxx::view<long> inds) {
-                      T *local = ddata->elements.local();
-                      for (long i = 0; i < n; ++i) local[inds[i]] += data[i];
-                      ++ddata->updates_applied;
-                    },
-                    ddata, size(), upcxx::make_view(data),
-                    upcxx::make_view(inds));
-      ++updates_sent;
-      data.clear();
-      inds.clear();
+    // async flush of batched updates; points of note:
+    // - readying of the returned future implies update data has been
+    //   transferred to the target and an update RPC invoked.
+    // - user-level progress by the caller thread (or one holding the persona
+    //   of the caller) will execute callbacks that mutate *this; it is unsafe
+    //   to access *this concurrently until the future is readied.
+    struct Buff {
+      long n;
+      upcxx::global_ptr<long> inds;
+      upcxx::global_ptr<T> data;
+    };
+    upcxx::future<> flush(upcxx::dist_object<State> &state) {
+      if (size() == 0) return upcxx::make_future();
+      // stage 1: allocate transfer buffers on the target
+      return upcxx::rpc(rank,
+                        [](long size) -> Buff {
+                          return {size, upcxx::new_array<long>(size),
+                                  upcxx::new_array<T>(size)};
+                        },
+                        size())
+          // stage 2: transfer update data to the target
+          .then([this](Buff buff) {
+            upcxx::promise<> xfr;
+            upcxx::rput(inds.data(), buff.inds, buff.n,
+                        upcxx::operation_cx::as_promise(xfr));
+            upcxx::rput(data.data(), buff.data, buff.n,
+                        upcxx::operation_cx::as_promise(xfr));
+            return upcxx::when_all(xfr.finalize(), upcxx::to_future(buff));
+          })
+          // stage 3: invoke remote update and clean up
+          .then([this, &state](Buff buff) {
+            // rputs have completed: safe to clear local buffers
+            data.clear();
+            inds.clear();
+            upcxx::rpc_ff(rank,
+                          [](upcxx::dist_object<State> &state, Buff buff) {
+                            const long *x_inds = buff.inds.local();
+                            const T *x_data = buff.data.local();
+                            T *local = state->elements.local();
+                            for (long i = 0; i < buff.n; ++i)
+                              local[x_inds[i]] += x_data[i];
+                            ++state->updates_applied;
+                            upcxx::delete_array(buff.inds);
+                            upcxx::delete_array(buff.data);
+                          },
+                          state, buff);
+            // record update invocation
+            ++updates_sent;
+          });
     }
   };
   std::vector<std::unique_ptr<Bin>> _bins;
@@ -174,9 +209,12 @@ class ConvergentMatrix {
 
   // flush all bins above size thresh.
   void flush(int thresh = 0) {
+    upcxx::future<> fut_all = upcxx::make_future();
     for (int i = 0; i < NPROW * NPCOL; ++i) {
-      if (_bins[i]->size() > thresh) _bins[i]->flush(_dist_data);
+      if (_bins[i]->size() > thresh)
+        fut_all = upcxx::when_all(fut_all, _bins[i]->flush(_d_state));
     }
+    fut_all.wait();
 
     if (_progress_interval > 0 && ++_flush_counter == _progress_interval) {
       upcxx::progress();  // user-level progress: may execute injected updates
@@ -226,7 +264,7 @@ class ConvergentMatrix {
         _m_local(roc(_m, NPROW, _myrow, MB)),
         _n_local(roc(_n, NPCOL, _mycol, NB)),
         // collective: dist_object initialization
-        _dist_data(LLD * _n_local) {
+        _d_state(LLD * _n_local) {
     // checks on matrix dimension
     assert(_m > 0);
     assert(_n > 0);
@@ -242,7 +280,7 @@ class ConvergentMatrix {
     assert(_m_local <= LLD);
 
     // initialize distributed matrix data
-    T *local_ptr = _dist_data->elements.local();
+    T *local_ptr = _d_state->elements.local();
     std::fill(local_ptr, local_ptr + LLD * _n_local, 0);
 
     // initialize update bins, providing a randomized flush order to avoid
@@ -270,7 +308,7 @@ class ConvergentMatrix {
    */
   ~ConvergentMatrix() {
     commit();
-    upcxx::delete_array(_dist_data->elements);
+    upcxx::delete_array(_d_state->elements);
   }
 
   /**
@@ -280,7 +318,7 @@ class ConvergentMatrix {
    * \b Note: The underlying storage _will_ be freed in the \c ConvergentMatrix
    * destructor - for a persistent copy, see \c get_local_data_copy().
    */
-  T *get_local_data() const { return _dist_data->elements.local(); }
+  T *get_local_data() const { return _d_state->elements.local(); }
 
   /**
    * Get a point to a _copy_ of the local distributed matrix storage (can be
@@ -291,7 +329,7 @@ class ConvergentMatrix {
    */
   T *get_local_data_copy() const {
     T *copy_ptr = new T[LLD * _n_local];
-    T *local_ptr = _dist_data->elements.local();
+    T *local_ptr = _d_state->elements.local();
     std::copy(local_ptr, local_ptr + LLD * _n_local, copy_ptr);
     return copy_ptr;
   }
@@ -307,7 +345,7 @@ class ConvergentMatrix {
     commit();
 
     // zero local storage
-    T *local_ptr = _dist_data->elements.local();
+    T *local_ptr = _d_state->elements.local();
     std::fill(local_ptr, local_ptr + LLD * _n_local, 0);
 
     // synchronize
@@ -393,6 +431,8 @@ class ConvergentMatrix {
    * Remote random access (read only) to distributed matrix elements
    * \param ix Leading dimension index
    * \param jx Trailing dimension index
+   *
+   * \b Note: Not \c const due to internal caching.
    */
   T operator()(long ix, long jx) {
     int rank = (jx / NB) % NPCOL + NPCOL * ((ix / MB) % NPROW);
@@ -400,8 +440,8 @@ class ConvergentMatrix {
               (ix / (MB * NPROW)) * MB + ix % MB;
     auto it = _elements_cached.find(rank);
     if (it == _elements_cached.end()) {
-      auto ddata = _dist_data.fetch(rank).wait();
-      auto ins = _elements_cached.insert({rank, ddata.elements});
+      auto state = _d_state.fetch(rank).wait();
+      auto ins = _elements_cached.insert({rank, state.elements});
       it = ins.first;
     }
     return upcxx::rget(it->second + ij).wait();
@@ -504,7 +544,7 @@ class ConvergentMatrix {
    * and again when you need to ensure the full updates have been applied.
    */
   void fill_lower() {
-    T *local_ptr = _dist_data->elements.local();
+    T *local_ptr = _d_state->elements.local();
     for (long j = 0; j < _n_local; j++) {
       long ix = (j / NB) * (NPCOL * NB) + _mycol * NB + j % NB;
       for (long i = 0; i < _m_local; i++) {
@@ -546,7 +586,7 @@ class ConvergentMatrix {
                       updates_expected.size(), upcxx::op_fast_add)
         .wait();
     const long expected = updates_expected[upcxx::rank_me()];
-    while (_dist_data->updates_applied < expected) upcxx::progress();
+    while (_d_state->updates_applied < expected) upcxx::progress();
 
     // sync: return when *all* ranks have entered quiescence
     upcxx::barrier();
@@ -565,7 +605,7 @@ class ConvergentMatrix {
    * \b Note: Used only in tests.
    */
   bool verify_local_elements(std::function<bool(const T, long, long)> eq) {
-    T *local_ptr = _dist_data->elements.local();
+    T *local_ptr = _d_state->elements.local();
     for (long j = 0; j < _n; j++)
       if ((j / NB) % NPCOL == _mycol) {
         long off_j = LLD * ((j / (NB * NPCOL)) * NB + j % NB);
@@ -642,7 +682,7 @@ class ConvergentMatrix {
     MPI_File_set_view(f_ata, 0, base_dtype, distmat, "native", MPI_INFO_NULL);
 
     // compaction in place
-    T *local_ptr = _dist_data->elements.local();
+    T *local_ptr = _d_state->elements.local();
     if (_m_local < LLD)
       for (long j = 1; j < _n_local; j++)
         for (long i = 0; i < _m_local; i++)
@@ -738,7 +778,7 @@ class ConvergentMatrix {
     MPI_File_set_view(f_ata, 0, base_dtype, distmat, "native", MPI_INFO_NULL);
 
     // read in local data
-    T *local_ptr = _dist_data->elements.local();
+    T *local_ptr = _d_state->elements.local();
     auto start = wt_clock_t::now();
     MPI_File_read_all(f_ata, local_ptr, _m_local * _n_local, base_dtype,
                       &status);
