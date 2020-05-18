@@ -95,6 +95,159 @@ MPI_Datatype CM_get_mpi_base_type<double>() {
 }  // namespace
 #endif  // ENABLE_MPIIO_SUPPORT
 
+namespace internal {
+
+// encapsulates distributed state
+template <typename T>
+struct State {
+  long updates_applied;           // number of updates applied
+  upcxx::global_ptr<T> elements;  // matrix elements
+  State(long size) : updates_applied(0), elements(upcxx::new_array<T>(size)) {}
+};
+
+// encapsulates a set of remote transfer buffers
+template <typename T>
+struct Buff {
+  long n;  // buffer size (number of elements)
+  upcxx::global_ptr<long> inds;
+  upcxx::global_ptr<T> data;
+};
+
+// wraps Buff allocation and failure propagation
+template <typename T>
+struct MBuff {
+  bool ok;       // whether allocation succeeded
+  Buff<T> buff;  // populated IFF ok == true
+  MBuff(long n) : ok(false) {
+    Buff<T> tmp_buff{n};
+    try {
+      tmp_buff.inds = upcxx::new_array<long>(n);
+    } catch (std::bad_alloc &) {
+      return;
+    }
+    try {
+      tmp_buff.data = upcxx::new_array<T>(n);
+    } catch (std::bad_alloc &) {
+      upcxx::delete_array(tmp_buff.inds);
+      return;
+    }
+    buff = tmp_buff;
+    ok = true;
+  }
+};
+
+template <typename T>
+upcxx::future<MBuff<T>> transfer(const long *src_inds, const T *src_data,
+                                 const MBuff<T> &mbuff) {
+  upcxx::promise<> xfr;
+  upcxx::rput(src_inds, mbuff.buff.inds, mbuff.buff.n,
+              upcxx::operation_cx::as_promise(xfr));
+  upcxx::rput(src_data, mbuff.buff.data, mbuff.buff.n,
+              upcxx::operation_cx::as_promise(xfr));
+  return upcxx::when_all(xfr.finalize(), upcxx::to_future(mbuff));
+}
+
+template <typename T>
+void apply(upcxx::dist_object<State<T>> &state, const Buff<T> &buff) {
+  const long *b_inds = buff.inds.local();
+  const T *b_data = buff.data.local();
+  T *elts = state->elements.local();
+  for (long i = 0; i < buff.n; ++i) elts[b_inds[i]] += b_data[i];
+  ++state->updates_applied;        // record update application
+  upcxx::delete_array(buff.inds);  // clean up xfr buffers
+  upcxx::delete_array(buff.data);
+}
+
+// single container for batching / dispatching remote updates
+template <typename T>
+struct Bin {
+  int rank;                // target rank
+  long updates_sent;       // number of updates sent
+  std::vector<T> data;     // update element value
+  std::vector<long> inds;  // update element linear index
+
+  Bin(int r) : rank(r), updates_sent(0) {}
+
+  // returns the number of batched update elements
+  long size() const { return data.size(); }
+
+  // appends the {value, index} pair to the update batch
+  void append(T val, long ij) {
+    data.push_back(val);
+    inds.push_back(ij);
+  }
+
+  // initiates async flush of batched updates
+  //
+  // notes:
+  // - readying of the returned future implies that update data has been
+  //   transferred to the target and an update RPC invoked.
+  // - user-level progress by the caller thread (or one holding the persona
+  //   of the caller) will execute callbacks that mutate *this; thus, it is
+  //   unsafe to access *this concurrently until the future is readied.
+  // - on_fail will be called if remote allocation fails; this will occur at
+  //   some time prior to when the returned future is readied.
+  upcxx::future<> flush(const upcxx::dist_object<State<T>> &state,
+                        const std::function<void()> &on_fail) {
+    if (size() == 0) return upcxx::make_future();
+    return upcxx::rpc(  // phase 1: allocate transfer buffers on the target
+               rank, [](long size) -> MBuff<T> { return MBuff<T>(size); },
+               size())
+        .then(  // phase 2: transfer update data to the target
+            [this, &on_fail](MBuff<T> mbuff) -> upcxx::future<MBuff<T>> {
+              if (!mbuff.ok) {  // failed allocation: notify and propagate
+                on_fail();
+                return upcxx::to_future(mbuff);
+              }
+              return transfer<T>(inds.data(), data.data(), mbuff);
+            })
+        .then(  // phase 3: invoke remote update and clean up local state
+            [this, &state](MBuff<T> mbuff) {
+              if (!mbuff.ok) return;  // failed allocation: abort
+              data.clear();           // rputs have completed: safe to clear
+              inds.clear();
+              upcxx::rpc_ff(rank, apply<T>, state, mbuff.buff);
+              ++updates_sent;  // record update invocation
+            });
+  }
+};
+
+// simple exponential backoff helper
+//
+// note: if constructed with progress = true, will spin in upcxx::progress()
+// until the wait interval expires (otherwise: calls this_thread::sleep_for).
+class Backoff {
+ public:
+  using Duration = std::chrono::duration<double, std::chrono::seconds::period>;
+  Backoff(Duration base, double growth, double jitter, bool progress)
+      : _growth(growth),
+        _progress(progress),
+        _dist(1.0 - jitter, 1.0 + jitter),
+        _delay(base) {}
+
+  void wait() {
+    using Clock = std::chrono::high_resolution_clock;
+    _delay *= _dist(_rd);  // apply jitter
+    if (_progress) {
+      for (const auto start = Clock::now();
+           Duration(Clock::now() - start) < _delay;)
+        upcxx::progress();
+    } else {
+      std::this_thread::sleep_for(_delay);
+    }
+    _delay *= _growth;  // grow
+  }
+
+ private:
+  const double _growth;
+  const bool _progress;
+  std::uniform_real_distribution<double> _dist;
+  std::random_device _rd;
+  Duration _delay;
+};
+
+}  // namespace internal
+
 /**
  * Convergent matrix abstraction
  * \tparam T Matrix data type (e.g. float)
@@ -120,115 +273,14 @@ class ConvergentMatrix {
   int _bin_flush_threshold = DEFAULT_BIN_FLUSH_THRESHOLD;
   int _flush_counter = 0;
 
-  // single container for distributed state
-  struct State {
-    long updates_applied;           // number of updates applied
-    upcxx::global_ptr<T> elements;  // matrix elements
-    State(long size)
-        : updates_applied(0), elements(upcxx::new_array<T>(size)) {}
-  };
-  upcxx::dist_object<State> _d_state;
+  // global distributed state
+  upcxx::dist_object<internal::State<T>> _d_state;
 
   // cache for remote storage pointers fetched from _d_state
   std::unordered_map<int /*rank*/, upcxx::global_ptr<T>> _elements_cached;
 
-  // single container for batching / dispatching remote updates
-  struct Bin {
-    int rank;                // target rank
-    long updates_sent;       // number of updates sent
-    std::vector<T> data;     // update element value
-    std::vector<long> inds;  // update element linear index
-    Bin(int r) : rank(r), updates_sent(0) {}
-    // returns the number of batched update elements
-    long size() const { return data.size(); }
-    // appends the {value, index} pair to the update batch
-    void append(T val, long ij) {
-      data.push_back(val);
-      inds.push_back(ij);
-    }
-    // initiates async flush of batched updates
-    //
-    // notes:
-    // - readying of the returned future implies that update data has been
-    //   transferred to the target and an update RPC invoked.
-    // - user-level progress by the caller thread (or one holding the persona
-    //   of the caller) will execute callbacks that mutate *this; thus, it is
-    //   unsafe to access *this concurrently until the future is readied.
-    // - notify_failure will be called if remote allocation fails; this will
-    //   occur at some time prior to when the returned future is readied.
-    upcxx::future<> flush(upcxx::dist_object<State> &state,
-                          const std::function<void()> &notify_failure) {
-      if (size() == 0) return upcxx::make_future();
-      // stage 1: allocate transfer buffers on the target
-      return upcxx::rpc(rank, [](long size) -> MBuff { return MBuff(size); },
-                        size())
-          // stage 2: transfer update data to the target
-          .then([this, &notify_failure](MBuff mbuff) -> upcxx::future<MBuff> {
-            if (!mbuff.ok) {  // failed allocation: abort and notify
-              notify_failure();
-              return upcxx::to_future(mbuff);
-            }
-            upcxx::promise<> xfr;
-            upcxx::rput(inds.data(), mbuff.buff.inds, mbuff.buff.n,
-                        upcxx::operation_cx::as_promise(xfr));
-            upcxx::rput(data.data(), mbuff.buff.data, mbuff.buff.n,
-                        upcxx::operation_cx::as_promise(xfr));
-            return upcxx::when_all(xfr.finalize(), upcxx::to_future(mbuff));
-          })
-          // stage 3: invoke remote update and clean up
-          .then([this, &state](MBuff mbuff) {
-            if (!mbuff.ok) return;  // failed allocation: abort
-            data.clear();  // rputs have completed: safe to clear local buffers
-            inds.clear();
-            upcxx::rpc_ff(
-                rank,
-                [](upcxx::dist_object<State> &state, Buff buff) {
-                  const long *x_inds = buff.inds.local();
-                  const T *x_data = buff.data.local();
-                  T *local = state->elements.local();
-                  for (long i = 0; i < buff.n; ++i)
-                    local[x_inds[i]] += x_data[i];
-                  ++state->updates_applied;        // record update application
-                  upcxx::delete_array(buff.inds);  // clean up transfer buffers
-                  upcxx::delete_array(buff.data);
-                },
-                state, mbuff.buff);
-            // record update invocation
-            ++updates_sent;
-          });
-    }
-
-   private:
-    // encapsulates a single set of remote transfer buffers
-    struct Buff {
-      long n;  // buffer size (number of elements)
-      upcxx::global_ptr<long> inds;
-      upcxx::global_ptr<T> data;
-    };
-    // wrapper for Buff allocation and failure propagation
-    struct MBuff {
-      bool ok;    // indicates allocation succeeded
-      Buff buff;  // populated IFF ok == true
-      MBuff(long n) : ok(false) {
-        Buff tmp_buff{n};
-        try {
-          tmp_buff.inds = upcxx::new_array<long>(n);
-        } catch (std::bad_alloc &) {
-          return;
-        }
-        try {
-          tmp_buff.data = upcxx::new_array<T>(n);
-        } catch (std::bad_alloc &) {
-          upcxx::delete_array(tmp_buff.inds);
-          return;
-        }
-        buff = tmp_buff;
-        ok = true;
-      }
-    };
-  };
-  std::vector<std::unique_ptr<Bin>> _bins;
-  std::vector<Bin *> _flush_order;  // elements owned by _bins
+  std::vector<std::unique_ptr<internal::Bin<T>>> _bins;
+  std::vector<internal::Bin<T> *> _flush_order;  // elements owned by _bins
 
   using wt_clock_t = std::chrono::high_resolution_clock;
   using wt_t = std::chrono::time_point<wt_clock_t>;
@@ -240,40 +292,6 @@ class ConvergentMatrix {
   // ** private methods **
   // *********************
 
-  // simple exponential backoff helper
-  //
-  // note: if constructed with progress = true, will spin in upcxx::progress()
-  // until the wait interval expires (otherwise: calls this_thread::sleep_for).
-  class Backoff {
-   public:
-    using Duration =
-        std::chrono::duration<double, std::chrono::seconds::period>;
-    Backoff(Duration base, double growth, double jitter, bool progress)
-        : _growth(growth),
-          _progress(progress),
-          _dist(1.0 - jitter, 1.0 + jitter),
-          _delay(base) {}
-
-    void wait() {
-      _delay *= _dist(_rd);  // apply jitter
-      if (_progress) {
-        for (const auto start = wt_clock_t::now();
-             Duration(wt_clock_t::now() - start) < _delay;)
-          upcxx::progress();
-      } else {
-        std::this_thread::sleep_for(_delay);
-      }
-      _delay *= _growth;  // grow
-    }
-
-   private:
-    const double _growth;
-    const bool _progress;
-    std::uniform_real_distribution<double> _dist;
-    std::random_device _rd;
-    Duration _delay;
-  };
-
   // flush all bins above size thresh
   void flush(int thresh = 0) {
     // retry parameters
@@ -282,11 +300,11 @@ class ConvergentMatrix {
     const double jitter = 0.05;
     const double growth = 1.5;
 
-    std::vector<Bin *> retry;
-    std::unique_ptr<Backoff> backoff;  // only construct if needed
+    std::vector<internal::Bin<T> *> retry;
+    std::unique_ptr<internal::Backoff> backoff;  // only construct if needed
     for (int i = 0; i < max_retries + 1; ++i) {
       auto &bins = i > 0 ? retry : _flush_order;
-      std::vector<Bin *> failed;
+      std::vector<internal::Bin<T> *> failed;
       upcxx::future<> fut = upcxx::make_future();
       for (auto *bin : bins)
         if (bin->size() > thresh)
@@ -298,15 +316,15 @@ class ConvergentMatrix {
       if (failed.empty()) break;
       std::copy(failed.begin(), failed.end(), std::back_inserter(retry));
       if (!backoff)
-        backoff = std::make_unique<Backoff>(base, growth, jitter,
-                                            _progress_interval > 0);
+        backoff = std::make_unique<internal::Backoff>(base, growth, jitter,
+                                                      _progress_interval > 0);
       backoff->wait();
     }
 
     if (!retry.empty()) {
       CM_LOG << "flush to " << retry.size()
              << " remote targets has failed after " << max_retries
-             << " reties; giving up" << std::endl;
+             << " retries; giving up" << std::endl;
       assert(retry.empty());  // fails
     }
 
@@ -380,7 +398,7 @@ class ConvergentMatrix {
     // initialize update bins, providing a randomized flush order to avoid
     // synchronized sweeps across peers
     for (int rank = 0; rank < NPROW * NPCOL; rank++) {
-      auto bin = std::make_unique<Bin>(rank);
+      auto bin = std::make_unique<internal::Bin<T>>(rank);
       _flush_order.push_back(bin.get());
       _bins.push_back(std::move(bin));
     }
