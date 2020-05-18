@@ -43,6 +43,7 @@
 #include <iostream>
 #include <memory>
 #include <random>
+#include <thread>
 #include <unordered_map>
 
 #include <upcxx/upcxx.hpp>
@@ -239,10 +240,50 @@ class ConvergentMatrix {
   // ** private methods **
   // *********************
 
-  // flush all bins above size thresh.
+  // simple exponential backoff helper
+  //
+  // note: if constructed with progress = true, will spin in upcxx::progress()
+  // until the wait interval expires (otherwise: calls this_thread::sleep_for).
+  class Backoff {
+   public:
+    using Duration =
+        std::chrono::duration<double, std::chrono::seconds::period>;
+    Backoff(Duration base, double growth, double jitter, bool progress)
+        : _growth(growth),
+          _progress(progress),
+          _dist(1.0 - jitter, 1.0 + jitter),
+          _delay(base) {}
+
+    void wait() {
+      _delay *= _dist(_rd);  // apply jitter
+      if (_progress) {
+        for (const auto start = wt_clock_t::now();
+             Duration(wt_clock_t::now() - start) < _delay;)
+          upcxx::progress();
+      } else {
+        std::this_thread::sleep_for(_delay);
+      }
+      _delay *= _growth;  // grow
+    }
+
+   private:
+    const double _growth;
+    const bool _progress;
+    std::uniform_real_distribution<double> _dist;
+    std::random_device _rd;
+    Duration _delay;
+  };
+
+  // flush all bins above size thresh
   void flush(int thresh = 0) {
-    const int max_retries = 3;
+    // retry parameters
+    const int max_retries = 10;
+    const auto base = std::chrono::milliseconds(100);
+    const double jitter = 0.05;
+    const double growth = 1.5;
+
     std::vector<Bin *> retry;
+    std::unique_ptr<Backoff> backoff;  // only construct if needed
     for (int i = 0; i < max_retries + 1; ++i) {
       auto &bins = i > 0 ? retry : _flush_order;
       std::vector<Bin *> failed;
@@ -256,12 +297,12 @@ class ConvergentMatrix {
       retry.clear();
       if (failed.empty()) break;
       std::copy(failed.begin(), failed.end(), std::back_inserter(retry));
-      // TODO: consider adding backoff here; this will require some thought on
-      // an appropriate cool-off behavior, as we do not want to sleep (i.e. we
-      // should spin in progress until sufficient time passes, unless progress
-      // calls have been explicitly disabled by setting _progress_interval
-      // appropriately).
+      if (!backoff)
+        backoff = std::make_unique<Backoff>(base, growth, jitter,
+                                            _progress_interval > 0);
+      backoff->wait();
     }
+
     if (!retry.empty()) {
       CM_LOG << "flush to " << retry.size()
              << " remote targets has failed after " << max_retries
