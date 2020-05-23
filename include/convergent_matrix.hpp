@@ -820,6 +820,10 @@ class ConvergentMatrix {
     MPI_Type_commit(&distmat);
 
     // sanity check on check on distributed array data size
+    // NOTE: If you find yourself here investigating an assertion failure, a
+    // likely scenario is 32-bit signed integer overflow in representing the
+    // size (bytes) of the locally owned portion of the distributed matrix.
+    // Consider refining your process grid.
     MPI_Type_size(distmat, &distmat_size);
     assert(distmat_size / static_cast<int>(sizeof(T)) == (_m_local * _n_local));
 
@@ -916,6 +920,10 @@ class ConvergentMatrix {
     MPI_Type_commit(&distmat);
 
     // sanity check on check on distributed array data size
+    // NOTE: If you find yourself here investigating an assertion failure, a
+    // likely scenario is 32-bit signed integer overflow in representing the
+    // size (bytes) of the locally owned portion of the distributed matrix.
+    // Consider refining your process grid.
     MPI_Type_size(distmat, &distmat_size);
     assert(distmat_size / static_cast<int>(sizeof(T)) == (_m_local * _n_local));
 
