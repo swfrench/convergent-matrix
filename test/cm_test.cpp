@@ -45,6 +45,7 @@ template <typename T>
 void randomElementUpdates() {
   constexpr int niter = 1000, nupdate = 10000;
 
+  cm::LocalMatrix<T> sum(2000, 1000);
   cm::LocalMatrix<T> local_mirror(2000, 1000);
   cm::ConvergentMatrix<T, NPROW, NPCOL, MB, NB,
                        /*LLD=*/1024>
@@ -65,7 +66,6 @@ void randomElementUpdates() {
 
     dist_mat.commit();
 
-    cm::LocalMatrix<T> sum(2000, 1000);
     sum = 0;
     upcxx::reduce_all(local_mirror.data(), sum.data(), sum.m() * sum.n(),
                       upcxx::op_fast_add)
@@ -86,6 +86,17 @@ void randomElementUpdates() {
     // Wait for verification to complete across all processes before starting
     // the next round (lest we potentially observe remotely injected updates).
     upcxx::barrier();
+  }
+
+  // While we're here, also test remote random access.
+  for (int iter = 0; iter < niter; ++iter) {
+    const long i = row_dist(rgen), j = col_dist(rgen);
+    const T val = dist_mat(i, j);
+    if (match(sum(i, j), val)) continue;
+    LOG << "verification failed at (" << i << ", " << j
+        << ") for random access want: " << sum(i, j) << " got: " << val
+        << std::endl;
+    exit(1);
   }
 }
 
@@ -313,12 +324,15 @@ void randomElementUpdatesMPIIO() {
   }
 
   // write out the current state ...
-  dist_mat1.save("/tmp/dist_mat1");
+  const char* save_dir = std::getenv("CM_TEST_DIR");
+  std::string save_path = save_dir == nullptr ? "/tmp" : save_dir;
+  save_path += "/dist_mat1";
+  dist_mat1.save(save_path.c_str());
 
   cm::ConvergentMatrix<T, NPROW, NPCOL, MB, NB, 1024> dist_mat2(2000, 1000);
 
   // ... and read it back in again ...
-  dist_mat2.load("/tmp/dist_mat1");
+  dist_mat2.load(save_path.c_str());
 
   // ... and re-verify.
   success = dist_mat2.verify_local_elements([&sum](T val, long i, long j) {
@@ -349,7 +363,7 @@ void runAllTests() {
 
 }  // namespace test
 
-int main(int argc, char *argv[]) {
+int main(int argc, char* argv[]) {
   upcxx::init();
 
 #ifdef ENABLE_MPIIO_SUPPORT
